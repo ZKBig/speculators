@@ -221,13 +221,15 @@ def serve_vllm_until_done() -> int:
         proc.kill()
         sys.exit(f"[r{RANK}] FATAL: vLLM not ready in time")
     print(f"[r{RANK}] node {NODE}: vLLM ready", flush=True)
-    if RANK == 0:
-        # Tokenizing needs the render endpoint, which is THIS server: upstream now
-        # derives loss masks from vLLM's chat template rather than a regex. So prep
-        # runs here, after health, and the trainers wait on READY.
-        prepare()
-    print(f"[r{RANK}] node {NODE}: serving until training completes", flush=True)
     try:
+        if RANK == 0:
+            # Tokenizing needs the render endpoint, which is THIS server: upstream
+            # now derives loss masks from vLLM's chat template rather than a regex.
+            # So prep runs here, after health, and the trainers wait on READY.
+            # Inside the try: a prep failure must still take the server down with
+            # it, or the process exits and leaves vLLM holding GPU 0.
+            prepare()
+        print(f"[r{RANK}] node {NODE}: serving until training completes", flush=True)
         while not DONE.exists():
             if proc.poll() is not None:
                 sys.exit(
