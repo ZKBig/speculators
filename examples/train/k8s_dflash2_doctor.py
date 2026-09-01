@@ -112,6 +112,52 @@ def check_tcpstore() -> None:
         report(False, "torch TCPStore on loopback", repr(e))
 
 
+def check_tcpstore_in_verifier_venv() -> None:
+    """The same store test, but in the VERIFIER's interpreter.
+
+    The check above runs in the job's python; vLLM's EngineCore runs in the
+    verifier venv with its own torch. Since torch 2.4 the store is backed by
+    libuv, and in a container that blocks what libuv needs the listener never
+    comes up -- the client then times out after ten minutes, which is exactly how
+    the real job stalls. So probe there too, and if it fails, say whether
+    USE_LIBUV=0 is the way out.
+    """
+    if not VLLM_PY.exists():
+        report(False, "TCPStore in verifier venv", f"{VLLM_PY} missing")
+        return
+    probe = (
+        "import datetime, socket, torch.distributed as dist\n"
+        "s = socket.socket(); s.bind(('127.0.0.1', 0));"
+        " p = s.getsockname()[1]; s.close()\n"
+        "st = dist.TCPStore('127.0.0.1', p, 1, is_master=True,"
+        " timeout=datetime.timedelta(seconds=20))\n"
+        "st.set('k', 'v'); assert st.get('k') == b'v'; print('ok')\n"
+    )
+    base = subprocess.run([str(VLLM_PY), "-c", probe], capture_output=True, text=True)
+    if base.returncode == 0:
+        report(True, "TCPStore in verifier venv", "works as-is")
+        return
+    err = (base.stderr or base.stdout).strip().splitlines()
+    alt = subprocess.run(
+        [str(VLLM_PY), "-c", probe],
+        capture_output=True,
+        text=True,
+        env=dict(os.environ, USE_LIBUV="0"),
+    )
+    if alt.returncode == 0:
+        report(
+            False,
+            "TCPStore in verifier venv",
+            "fails by default, WORKS with USE_LIBUV=0 -> set DF2_VLLM_USE_LIBUV=0",
+        )
+    else:
+        report(
+            False,
+            "TCPStore in verifier venv",
+            f"fails with and without libuv: {err[-1] if err else '?'}",
+        )
+
+
 def check_pod_ip() -> None:
     """The fallback address, if loopback is the problem: DF2_VLLM_HOST."""
     try:
@@ -278,6 +324,10 @@ def check_vllm_starts() -> None:
         VLLM_USE_FLASHINFER_SAMPLER="0",
         VLLM_ATTENTION_BACKEND=os.environ.get("DF2_VLLM_ATTN_BACKEND") or "FLASH_ATTN",
     )
+    libuv = os.environ.get("DF2_VLLM_USE_LIBUV")
+    if libuv is not None:
+        env["USE_LIBUV"] = libuv
+        print(f"    USE_LIBUV={libuv}")
     cmd = [
         str(VLLM_PY),
         "scripts/launch_vllm.py",
@@ -342,6 +392,7 @@ def main() -> int:
     check_loopback()
     check_lo_interface()
     check_tcpstore()
+    check_tcpstore_in_verifier_venv()
     check_pod_ip()
     check_stale_vllm()
     check_gpus()
