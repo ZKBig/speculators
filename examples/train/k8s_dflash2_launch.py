@@ -191,7 +191,12 @@ def serve_vllm_until_done() -> int:
             # engine and can send it hunting for IB devices.
             NCCL_IB_DISABLE="1",
             NCCL_P2P_DISABLE="1",
-            VLLM_USE_FLASHINFER_SAMPLER="0",
+            # Run EngineCore in-process. Split across processes it talks to the
+        # frontend through a loopback TCPStore, and when that store's server side
+        # does not come up the only symptom is a silent ten-minute stall followed
+        # by "client socket has timed out". One GPU does not need the split.
+        VLLM_ENABLE_V1_MULTIPROCESSING=env("DF2_VLLM_V1_MP", "0"),
+        VLLM_USE_FLASHINFER_SAMPLER="0",
             VLLM_ATTENTION_BACKEND=env("DF2_VLLM_ATTN_BACKEND", "FLASH_ATTN"),
         )
     )
