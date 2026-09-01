@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# ruff: noqa: T201, S108, S603, BLE001, PLR2004, PLW1510, PTH103, PTH118
+# ruff: noqa: T201, S104, S108, S603, BLE001, PLR2004, PLW1510, PTH103, PTH118
 # A cluster ops launcher, not library code: it prints progress, shells out, and
 # writes to /tmp on purpose. Linting it as library code fights every one of those.
 """Launch DFlash2 online training on the k8s job framework.
@@ -77,6 +77,10 @@ LOG_FREQ = env("DF2_LOG_FREQ", "50")
 RUN_NAME = env("DF2_RUN_NAME", "dflash2-qwen3-4b-8spec")
 
 VLLM_PORT = int(env("DF2_VLLM_PORT", "8300"))
+# Host the trainers and the health check dial. Loopback by default; set it to
+# the pod's own address if the container's "lo" is not usable, which shows up
+# as every connection to 127.0.0.1 timing out.
+VLLM_HOST = env("DF2_VLLM_HOST", "127.0.0.1")
 VLLM_VENV = Path(env("DF2_VLLM_VENV", "/gpfs/zwang33/venv_vllm"))
 VLLM_PY = Path(env("DF2_VLLM_PY", str(VLLM_VENV / "bin" / "python")))
 
@@ -133,7 +137,7 @@ def child_env(**extra: str) -> dict:
 def vllm_healthy() -> bool:
     try:
         with urllib.request.urlopen(
-            f"http://localhost:{VLLM_PORT}/health", timeout=5
+            f"http://{VLLM_HOST}:{VLLM_PORT}/health", timeout=5
         ) as r:
             return r.status == 200
     except Exception:
@@ -192,11 +196,11 @@ def serve_vllm_until_done() -> int:
             NCCL_IB_DISABLE="1",
             NCCL_P2P_DISABLE="1",
             # Run EngineCore in-process. Split across processes it talks to the
-        # frontend through a loopback TCPStore, and when that store's server side
-        # does not come up the only symptom is a silent ten-minute stall followed
-        # by "client socket has timed out". One GPU does not need the split.
-        VLLM_ENABLE_V1_MULTIPROCESSING=env("DF2_VLLM_V1_MP", "0"),
-        VLLM_USE_FLASHINFER_SAMPLER="0",
+            # frontend through a loopback TCPStore, and when that store's server side
+            # does not come up the only symptom is a silent ten-minute stall followed
+            # by "client socket has timed out". One GPU does not need the split.
+            VLLM_ENABLE_V1_MULTIPROCESSING=env("DF2_VLLM_V1_MP", "0"),
+            VLLM_USE_FLASHINFER_SAMPLER="0",
             VLLM_ATTENTION_BACKEND=env("DF2_VLLM_ATTN_BACKEND", "FLASH_ATTN"),
         )
     )
@@ -207,6 +211,8 @@ def serve_vllm_until_done() -> int:
         "--target-layer-ids",
         *TARGET_LAYER_IDS,
         "--",
+        "--host",
+        env("DF2_VLLM_BIND", "0.0.0.0"),
         "--port",
         str(VLLM_PORT),
         "--max-model-len",
@@ -280,7 +286,7 @@ def prepare() -> None:
         # NOT the /v1-suffixed URL the trainer uses: prepare_data appends
         # /v1/chat/completions/render itself, so the /v1 form 404s.
         "--render-endpoint",
-        f"http://localhost:{VLLM_PORT}",
+        f"http://{VLLM_HOST}:{VLLM_PORT}",
         "--num-preprocessing-workers",
         PREP_WORKERS,
         "--overwrite",
@@ -332,7 +338,7 @@ def train() -> int:
         "--data-path",
         str(DATA_DIR),
         "--vllm-endpoint",
-        f"http://localhost:{VLLM_PORT}/v1",
+        f"http://{VLLM_HOST}:{VLLM_PORT}/v1",
         "--save-path",
         str(OUTPUT_DIR / "checkpoints"),
         "--block-size",
