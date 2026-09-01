@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# ruff: noqa: T201, S104, S310, S603, S607, S108, BLE001, PLR2004, PLW0603, PLW1510, PLC0415, PTH112
+# ruff: noqa: T201, S104, S110, S310, S603, S607, S108, BLE001, PLR2004, PLW0603, PLW1510, PLC0415, PTH112
 """Preflight checks for the DFlash2 k8s job.
 
 Every check here corresponds to a way the real job has stalled or died, and each
@@ -15,6 +15,7 @@ import os
 import shutil
 import socket
 import subprocess
+import time
 import urllib.request
 from datetime import timedelta
 from pathlib import Path
@@ -30,6 +31,11 @@ VLLM_PY = Path(
     or (os.environ.get("DF2_VLLM_VENV") or "/gpfs/zwang33/venv_vllm") + "/bin/python"
 )
 HF_HOME = Path(os.environ.get("HF_HOME") or (Path.home() / ".cache/huggingface"))
+VLLM_PORT = int(os.environ.get("DF2_VLLM_PORT") or 8300)
+VLLM_HOST = os.environ.get("DF2_VLLM_HOST") or "127.0.0.1"
+TARGET_LAYER_IDS = (os.environ.get("DF2_TARGET_LAYER_IDS") or "1 9 17 25 33").split()
+SEQ_LENGTH = os.environ.get("DF2_SEQ_LENGTH") or "8192"
+START_TIMEOUT = int(os.environ.get("DF2_VLLM_TIMEOUT") or 900)
 
 _fail = 0
 
@@ -238,6 +244,91 @@ def check_disk() -> None:
             report(free_gb > 50, f"free space on {p}", f"{free_gb:.0f} GB")
 
 
+def check_vllm_starts() -> None:
+    """Actually start the verifier and wait for /health.
+
+    The other checks pass on a machine where the real job still stalls: they
+    prove the pieces work, not that vLLM comes up. This runs the verifier under
+    the SAME environment k8s_dflash2_launch.py gives it, so a stall here is the
+    stall, reproduced in minutes instead of a whole 8-GPU job.
+    """
+    env = dict(os.environ)
+    for var in (
+        "RANK",
+        "WORLD_SIZE",
+        "LOCAL_RANK",
+        "LOCAL_WORLD_SIZE",
+        "GROUP_RANK",
+        "GROUP_WORLD_SIZE",
+        "MASTER_ADDR",
+        "MASTER_PORT",
+    ):
+        env.pop(var, None)
+    env.update(
+        PYTHONPATH=os.pathsep.join(
+            [str(REPO / "src"), str(REPO / "hs_connectors" / "src")]
+            + ([env["PYTHONPATH"]] if env.get("PYTHONPATH") else [])
+        ),
+        CUDA_VISIBLE_DEVICES="0",
+        VLLM_HOST_IP=os.environ.get("DF2_VLLM_HOST_IP") or "127.0.0.1",
+        HOST_IP=os.environ.get("DF2_VLLM_HOST_IP") or "127.0.0.1",
+        NCCL_IB_DISABLE="1",
+        NCCL_P2P_DISABLE="1",
+        VLLM_ENABLE_V1_MULTIPROCESSING=os.environ.get("DF2_VLLM_V1_MP") or "0",
+        VLLM_USE_FLASHINFER_SAMPLER="0",
+        VLLM_ATTENTION_BACKEND=os.environ.get("DF2_VLLM_ATTN_BACKEND") or "FLASH_ATTN",
+    )
+    cmd = [
+        str(VLLM_PY),
+        "scripts/launch_vllm.py",
+        MODEL,
+        "--target-layer-ids",
+        *TARGET_LAYER_IDS,
+        "--",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        str(VLLM_PORT),
+        "--max-model-len",
+        str(int(SEQ_LENGTH) + 2),
+    ]
+    print(f"    starting: {' '.join(cmd)}")
+    print(f"    (up to {START_TIMEOUT}s; vLLM's own output follows)")
+    proc = subprocess.Popen(cmd, env=env, cwd=REPO)
+    deadline = time.time() + START_TIMEOUT
+    try:
+        while time.time() < deadline:
+            if proc.poll() is not None:
+                report(
+                    False,
+                    "vLLM starts",
+                    f"exited with {proc.returncode} during startup",
+                )
+                return
+            try:
+                with urllib.request.urlopen(
+                    f"http://{VLLM_HOST}:{VLLM_PORT}/health", timeout=5
+                ) as r:
+                    if r.status == 200:
+                        took = START_TIMEOUT - int(deadline - time.time())
+                        report(True, "vLLM starts", f"healthy after ~{took}s")
+                        return
+            except Exception:
+                pass
+            time.sleep(5)
+        report(
+            False,
+            "vLLM starts",
+            f"no /health after {START_TIMEOUT}s -- THIS is the stall",
+        )
+    finally:
+        proc.terminate()
+        try:
+            proc.wait(timeout=60)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+
+
 def main() -> int:
     if RANK != 0:
         return 0
@@ -259,6 +350,10 @@ def main() -> int:
     check_hf_network()
     check_data()
     check_disk()
+    if os.environ.get("DF2_DOCTOR_START_VLLM") == "1":
+        print()
+        print("=== starting the verifier for real (DF2_DOCTOR_START_VLLM=1) ===")
+        check_vllm_starts()
     print()
     if _fail:
         print(f"{_fail} check(s) failed -- fix these before submitting the real job.")
