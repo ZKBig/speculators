@@ -75,6 +75,10 @@ WARMUP_RATIO = env("DF2_WARMUP_RATIO", "0.04")
 CHECKPOINT_FREQ = env("DF2_CHECKPOINT_FREQ", "0.1")
 LOG_FREQ = env("DF2_LOG_FREQ", "50")
 RUN_NAME = env("DF2_RUN_NAME", "dflash2-qwen3-4b-8spec")
+# Stop after N optimizer steps. For a smoke run the question is whether the
+# pipeline reaches training at all, and an epoch over millions of samples is a
+# very expensive way to answer it.
+MAX_STEPS = env("DF2_MAX_STEPS", "")
 
 VLLM_PORT = int(env("DF2_VLLM_PORT", "8300"))
 # Host the trainers and the health check dial. Loopback by default; set it to
@@ -427,6 +431,8 @@ def train() -> int:
     ]
     if VAL_DATA_DIR:
         cmd += ["--val-data-path", VAL_DATA_DIR]
+    if MAX_STEPS:
+        cmd += ["--max-steps", MAX_STEPS]
     if TRAIN_RANK == 0:
         print(
             f"[r{RANK}] trainer group: {TRAIN_WORLD} ranks "
