@@ -244,7 +244,12 @@ def serve_vllm_until_done() -> int:
     bind = env("DF2_VLLM_BIND", "")
     if bind:
         cmd += ["--host", bind]
-    if env("DF2_VLLM_MAX_MODEL_LEN", "1") == "1":
+    # Off by default: the render endpoint validates a request against
+    # max_model_len BEFORE prepare_data gets to truncate it to --seq-length, so
+    # capping the server at the training length rejects every conversation longer
+    # than that ("prompt contains at least 8195 input tokens"). Left unset, vLLM
+    # uses the model's own context and truncation happens where it should.
+    if env("DF2_VLLM_MAX_MODEL_LEN", "0") == "1":
         cmd += ["--max-model-len", str(int(SEQ_LENGTH) + 2)]
     print(f"[r{RANK}] node {NODE}: verifier on GPU 0 ({VLLM_PY})", flush=True)
     proc = subprocess.Popen(cmd, env=e, cwd=REPO)
