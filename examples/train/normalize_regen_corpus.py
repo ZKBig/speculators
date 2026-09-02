@@ -25,11 +25,26 @@ import pathlib
 import sys
 
 
-def _iter_files(src: str) -> list[pathlib.Path]:
+def _iter_files(
+    src: str, include: list[str] | None, exclude: list[str] | None
+) -> list[pathlib.Path]:
     if src.startswith("hf:"):
         from huggingface_hub import snapshot_download
 
-        local = snapshot_download(repo_id=src[3:], repo_type="dataset")
+        # Filter at download time, not after: these files are hundreds of MB each,
+        # and one of them (nemotron_math) is published with an LFS size that
+        # disagrees with the bytes served, so every downloader rejects it on the
+        # consistency check. Excluding it is the only way past that.
+        allow = [f"{stem}.jsonl" for stem in include] if include else ["*.jsonl"]
+        ignore = [f"{stem}.jsonl" for stem in exclude] if exclude else None
+        if ignore:
+            print(f"[src] excluding {', '.join(exclude or [])}")
+        local = snapshot_download(
+            repo_id=src[3:],
+            repo_type="dataset",
+            allow_patterns=allow,
+            ignore_patterns=ignore,
+        )
         print(f"[src] {src} -> {local}")
         root = pathlib.Path(local)
     else:
@@ -62,6 +77,12 @@ def main() -> None:
         help="output directory (env DF2_NORMALIZE_OUT)",
     )
     ap.add_argument(
+        "--exclude",
+        nargs="*",
+        default=(os.environ.get("DF2_NORMALIZE_EXCLUDE") or "").split() or None,
+        help="skip these stems (env DF2_NORMALIZE_EXCLUDE, space sep)",
+    )
+    ap.add_argument(
         "--include",
         nargs="*",
         default=(os.environ.get("DF2_NORMALIZE_INCLUDE") or "").split() or None,
@@ -81,9 +102,12 @@ def main() -> None:
     out.mkdir(parents=True, exist_ok=True)
     kept_total = dropped_total = 0
 
-    for path in _iter_files(args.src):
+    for path in _iter_files(args.src, args.include, args.exclude):
         if args.include and path.stem not in args.include:
             print(f"[skip] {path.name}")
+            continue
+        if args.exclude and path.stem in args.exclude:
+            print(f"[skip] {path.name} (excluded)")
             continue
         kept = dropped = 0
         with (
