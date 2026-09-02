@@ -20,7 +20,9 @@ the training data has to have.
 
 import argparse
 import json
+import os
 import pathlib
+import sys
 
 
 def _iter_files(src: str) -> list[pathlib.Path]:
@@ -47,16 +49,33 @@ def _error_of(row: dict) -> str | None:
 
 
 def main() -> None:
+    # Env defaults so this can run as a job's mainProgram, which passes no args.
     ap = argparse.ArgumentParser()
-    ap.add_argument("--src", required=True, help='"hf:org/dataset" or a local dir')
-    ap.add_argument("--out", required=True)
+    ap.add_argument(
+        "--src",
+        default=os.environ.get("DF2_NORMALIZE_SRC"),
+        help='"hf:org/dataset" or a local dir (env DF2_NORMALIZE_SRC)',
+    )
+    ap.add_argument(
+        "--out",
+        default=os.environ.get("DF2_NORMALIZE_OUT"),
+        help="output directory (env DF2_NORMALIZE_OUT)",
+    )
     ap.add_argument(
         "--include",
         nargs="*",
-        default=None,
-        help="only these file stems (default: all)",
+        default=(os.environ.get("DF2_NORMALIZE_INCLUDE") or "").split() or None,
+        help="only these stems (env DF2_NORMALIZE_INCLUDE, space sep)",
     )
     args = ap.parse_args()
+    if not args.src or not args.out:
+        raise SystemExit("need --src/--out (or DF2_NORMALIZE_SRC / DF2_NORMALIZE_OUT)")
+
+    # One writer. As a mainProgram this runs under torchrun, and eight ranks
+    # writing the same files would interleave lines into corrupt JSON.
+    if int(os.environ.get("RANK") or 0) != 0:
+        print(f"[rank {os.environ.get('RANK')}] not the writer; exiting")
+        sys.exit(0)
 
     out = pathlib.Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
