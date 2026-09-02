@@ -97,6 +97,19 @@ _DIST_VARS = (
     "GROUP_WORLD_SIZE",
     "MASTER_ADDR",
     "MASTER_PORT",
+    # torchrun sets TORCHELASTIC_USE_AGENT_STORE=True for its workers, and torch's
+    # TCP rendezvous reads it: with it set, init_process_group builds a CLIENT
+    # store and waits for the agent to be listening, even at world_size=1 where
+    # rank 0 would otherwise create the server itself. A child that is not part of
+    # the job -- vLLM here -- then waits ten minutes for a listener that does not
+    # exist. Constructing a TCPStore directly bypasses the rendezvous, which is
+    # why a store probe passes in the same interpreter that vLLM stalls in.
+    "TORCHELASTIC_USE_AGENT_STORE",
+    "TORCHELASTIC_RESTART_COUNT",
+    "TORCHELASTIC_MAX_RESTARTS",
+    "TORCHELASTIC_RUN_ID",
+    "TORCHELASTIC_ERROR_FILE",
+    "TORCH_ELASTIC_WORKER_IDENTIFIER",
 )
 
 

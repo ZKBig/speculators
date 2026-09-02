@@ -158,6 +158,40 @@ def check_tcpstore_in_verifier_venv() -> None:
         )
 
 
+def check_rendezvous_in_verifier_venv() -> None:
+    """init_process_group at world_size=1, the call vLLM's EngineCore stalls in.
+
+    Distinct from the store probe above: this one goes through torch's TCP
+    rendezvous, which reads TORCHELASTIC_USE_AGENT_STORE and, when a torchrun
+    agent set it, builds a CLIENT store instead of letting rank 0 create the
+    server. That is a ten-minute timeout for any child launched from a worker
+    that did not clear the variable, and it is invisible to a direct TCPStore.
+    """
+    if not VLLM_PY.exists():
+        report(False, "rendezvous in verifier venv", f"{VLLM_PY} missing")
+        return
+    probe = (
+        "import datetime, os, socket, torch.distributed as dist\n"
+        "s = socket.socket(); s.bind(('127.0.0.1', 0));"
+        " p = s.getsockname()[1]; s.close()\n"
+        "dist.init_process_group(backend='gloo', init_method=f'tcp://127.0.0.1:{p}',"
+        " world_size=1, rank=0, timeout=datetime.timedelta(seconds=20))\n"
+        "dist.destroy_process_group(); print('ok')\n"
+    )
+    inherited = os.environ.get("TORCHELASTIC_USE_AGENT_STORE")
+    out = subprocess.run(
+        [str(VLLM_PY), "-c", probe], capture_output=True, text=True, timeout=120
+    )
+    detail = f"TORCHELASTIC_USE_AGENT_STORE={inherited or '<unset>'}"
+    if out.returncode == 0:
+        report(True, "rendezvous in verifier venv", detail)
+        return
+    tail = (out.stderr or out.stdout).strip().splitlines()
+    report(
+        False, "rendezvous in verifier venv", f"{detail}; {tail[-1] if tail else '?'}"
+    )
+
+
 def check_pod_ip() -> None:
     """The fallback address, if loopback is the problem: DF2_VLLM_HOST."""
     try:
@@ -299,6 +333,9 @@ def check_vllm_starts() -> None:
     stall, reproduced in minutes instead of a whole 8-GPU job.
     """
     env = dict(os.environ)
+    # TORCHELASTIC_USE_AGENT_STORE is the one that matters: torch's TCP rendezvous
+    # reads it and builds a CLIENT store, so a child launched from a torchrun
+    # worker waits for a listener the agent never puts at that address.
     for var in (
         "RANK",
         "WORLD_SIZE",
@@ -308,6 +345,12 @@ def check_vllm_starts() -> None:
         "GROUP_WORLD_SIZE",
         "MASTER_ADDR",
         "MASTER_PORT",
+        "TORCHELASTIC_USE_AGENT_STORE",
+        "TORCHELASTIC_RESTART_COUNT",
+        "TORCHELASTIC_MAX_RESTARTS",
+        "TORCHELASTIC_RUN_ID",
+        "TORCHELASTIC_ERROR_FILE",
+        "TORCH_ELASTIC_WORKER_IDENTIFIER",
     ):
         env.pop(var, None)
     env.update(
@@ -393,6 +436,7 @@ def main() -> int:
     check_lo_interface()
     check_tcpstore()
     check_tcpstore_in_verifier_venv()
+    check_rendezvous_in_verifier_venv()
     check_pod_ip()
     check_stale_vllm()
     check_gpus()
