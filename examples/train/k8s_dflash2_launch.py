@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# ruff: noqa: T201, S104, S108, S603, BLE001, PLR2004, PLW1510, PTH103, PTH118
+# ruff: noqa: T201, S108, S603, BLE001, C901, PLR2004, PLW1510, PTH103, PTH118
 # A cluster ops launcher, not library code: it prints progress, shells out, and
 # writes to /tmp on purpose. Linting it as library code fights every one of those.
 """Launch DFlash2 online training on the k8s job framework.
@@ -195,29 +195,40 @@ def serve_vllm_until_done() -> int:
             # engine and can send it hunting for IB devices.
             NCCL_IB_DISABLE="1",
             NCCL_P2P_DISABLE="1",
-            # Run EngineCore in-process. Split across processes it talks to the
-            # frontend through a loopback TCPStore, and when that store's server side
-            # does not come up the only symptom is a silent ten-minute stall followed
-            # by "client socket has timed out". One GPU does not need the split.
-            VLLM_ENABLE_V1_MULTIPROCESSING=env("DF2_VLLM_V1_MP", "0"),
             VLLM_USE_FLASHINFER_SAMPLER="0",
             VLLM_ATTENTION_BACKEND=env("DF2_VLLM_ATTN_BACKEND", "FLASH_ATTN"),
         )
     )
+    # Optional, and only applied when non-empty. Everything this launcher adds
+    # over the XPress one lives here, so setting them all empty reduces the
+    # verifier to that launcher's exact invocation -- which is the only way to
+    # separate "our extra flags broke it" from "the environment changed".
+    #   DF2_VLLM_V1_MP=0     run EngineCore in-process (no loopback TCPStore)
+    #   DF2_VLLM_USE_LIBUV=0 legacy store backend; libuv's listener can fail
+    #                        silently in a restricted container
+    for _var, _key in (
+        ("DF2_VLLM_V1_MP", "VLLM_ENABLE_V1_MULTIPROCESSING"),
+        ("DF2_VLLM_USE_LIBUV", "USE_LIBUV"),
+    ):
+        _val = env(_var, "")
+        if _val:
+            e[_key] = _val
+            print(f"[r{RANK}] verifier env {_key}={_val}", flush=True)
+
     cmd = [
         str(VLLM_PY),
         "scripts/launch_vllm.py",
         MODEL,
         "--target-layer-ids",
         *TARGET_LAYER_IDS,
-        "--",
-        "--host",
-        env("DF2_VLLM_BIND", "0.0.0.0"),
         "--port",
         str(VLLM_PORT),
-        "--max-model-len",
-        str(int(SEQ_LENGTH) + 2),
     ]
+    bind = env("DF2_VLLM_BIND", "")
+    if bind:
+        cmd += ["--host", bind]
+    if env("DF2_VLLM_MAX_MODEL_LEN", "1") == "1":
+        cmd += ["--max-model-len", str(int(SEQ_LENGTH) + 2)]
     print(f"[r{RANK}] node {NODE}: verifier on GPU 0 ({VLLM_PY})", flush=True)
     proc = subprocess.Popen(cmd, env=e, cwd=REPO)
     for i in range(360):  # up to 30 min
