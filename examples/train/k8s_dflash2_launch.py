@@ -296,7 +296,12 @@ def serve_vllm_until_done() -> int:
 
 def prepare() -> None:
     """Rank 0 only: tokenize the corpus unless it is already prepared."""
-    want = f"{TRAIN_SRC}|{MAX_SAMPLES or 'all'}|{SEQ_LENGTH}"
+    # MODEL belongs in the stamp: input_ids and loss_mask are produced with that
+    # model's tokenizer and chat template, so a corpus prepared for one verifier
+    # is silently wrong for another. Everything else about a run -- speculator
+    # type, block size, losses, learning rate -- is decided at training time and
+    # can reuse the same corpus.
+    want = f"{MODEL}|{TRAIN_SRC}|{MAX_SAMPLES or 'all'}|{SEQ_LENGTH}"
     if data_is_prepared():
         if STAMP.exists() and STAMP.read_text() != want:
             sys.exit(
