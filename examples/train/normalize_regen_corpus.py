@@ -23,6 +23,7 @@ import json
 import os
 import pathlib
 import sys
+import urllib.request
 
 
 def _iter_files(
@@ -47,12 +48,47 @@ def _iter_files(
         )
         print(f"[src] {src} -> {local}")
         root = pathlib.Path(local)
+        extra = []
+        if exclude and os.environ.get("DF2_NORMALIZE_FETCH_UNVERIFIED") == "1":
+            raw_dir = pathlib.Path(
+                os.environ.get("DF2_NORMALIZE_RAW_DIR") or (root.parent / "unverified")
+            )
+            extra = [
+                _fetch_unverified(src[3:], f"{stem}.jsonl", raw_dir / f"{stem}.jsonl")
+                for stem in exclude
+            ]
+        files = sorted(p for p in root.rglob("*.jsonl") if p.is_file())
+        if not files and not extra:
+            raise SystemExit(f"no .jsonl under {root}")
+        return files + extra
     else:
         root = pathlib.Path(src)
     files = sorted(p for p in root.rglob("*.jsonl") if p.is_file())
     if not files:
         raise SystemExit(f"no .jsonl under {root}")
     return files
+
+
+def _fetch_unverified(repo: str, filename: str, dest: pathlib.Path) -> pathlib.Path:
+    """Stream one file straight from the CDN, skipping the size check.
+
+    huggingface_hub compares the bytes it received against the size recorded in
+    the LFS pointer and refuses the download when they disagree. That guard is
+    right in general, but nemotron_math_Qwen3-8B.jsonl is published with a stale
+    pointer -- the same 44 KB discrepancy on every attempt and on both download
+    backends -- so the only way to read that file is to skip the check.
+    """
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    if dest.exists() and dest.stat().st_size > 0:
+        print(f"[raw] {dest} already present ({dest.stat().st_size} bytes)")
+        return dest
+    url = f"https://huggingface.co/datasets/{repo}/resolve/main/{filename}"
+    print(f"[raw] fetching {filename} without the size check")
+    with urllib.request.urlopen(url) as r, open(dest, "wb") as f:  # noqa: S310
+        while chunk := r.read(1 << 22):
+            f.write(chunk)
+    print(f"[raw] {dest} ({dest.stat().st_size} bytes)")
+    return dest
 
 
 def _error_of(row: dict) -> str | None:
@@ -106,7 +142,11 @@ def main() -> None:
         if args.include and path.stem not in args.include:
             print(f"[skip] {path.name}")
             continue
-        if args.exclude and path.stem in args.exclude:
+        if (
+            args.exclude
+            and path.stem in args.exclude
+            and os.environ.get("DF2_NORMALIZE_FETCH_UNVERIFIED") != "1"
+        ):
             print(f"[skip] {path.name} (excluded)")
             continue
         kept = dropped = 0

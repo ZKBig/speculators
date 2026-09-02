@@ -326,8 +326,16 @@ def prepare() -> None:
     READY.write_text("ok")
 
 
-def wait_for_prep(timeout_s: int = 14400) -> None:
-    print(f"[r{RANK}] waiting for rank 0 to finish data prep", flush=True)
+def wait_for_prep(timeout_s: int | None = None) -> None:
+    # Tokenizing the full regenerated collection is tens of GB of text; a cap that
+    # is too low makes every trainer exit while rank 0 is still working, and the
+    # job dies with no indication that it was simply not finished yet.
+    timeout_s = timeout_s or int(env("DF2_PREP_TIMEOUT_S", "43200"))
+    print(
+        f"[r{RANK}] waiting for rank 0 to finish data prep "
+        f"(up to {timeout_s // 3600}h)",
+        flush=True,
+    )
     deadline = time.time() + timeout_s
     while time.time() < deadline:
         if READY.exists():
