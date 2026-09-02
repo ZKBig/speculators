@@ -79,6 +79,10 @@ RUN_NAME = env("DF2_RUN_NAME", "dflash2-qwen3-4b-8spec")
 # pipeline reaches training at all, and an epoch over millions of samples is a
 # very expensive way to answer it.
 MAX_STEPS = env("DF2_MAX_STEPS", "")
+# Resume is right for a long run and wrong for a smoke test: with --epochs 1,
+# a checkpoint from an earlier attempt makes the trainer conclude the run is
+# already finished and exit in seconds, having trained nothing.
+NO_RESUME = env("DF2_NO_RESUME", "")
 
 VLLM_PORT = int(env("DF2_VLLM_PORT", "8300"))
 # Host the trainers and the health check dial. Loopback by default; set it to
@@ -438,6 +442,8 @@ def train() -> int:
         cmd += ["--val-data-path", VAL_DATA_DIR]
     if MAX_STEPS:
         cmd += ["--max-steps", MAX_STEPS]
+    if NO_RESUME == "1":
+        cmd += ["--no-resume-from-checkpoint"]
     if TRAIN_RANK == 0:
         print(
             f"[r{RANK}] trainer group: {TRAIN_WORLD} ranks "
