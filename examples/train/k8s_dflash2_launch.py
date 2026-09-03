@@ -83,6 +83,11 @@ MAX_STEPS = env("DF2_MAX_STEPS", "")
 # a checkpoint from an earlier attempt makes the trainer conclude the run is
 # already finished and exit in seconds, having trained nothing.
 NO_RESUME = env("DF2_NO_RESUME", "")
+# Prepare the corpus and exit, without training. Tokenizing runs on rank 0
+# alone while the other seven ranks sleep in wait_for_prep, so a long prepare
+# inside the training job idles seven GPUs for its whole duration. Run this as
+# a one-GPU job first; the training job then finds the stamp and skips it.
+PREP_ONLY = env("DF2_PREP_ONLY", "")
 
 VLLM_PORT = int(env("DF2_VLLM_PORT", "8300"))
 # Host the trainers and the health check dial. Loopback by default; set it to
@@ -277,6 +282,9 @@ def serve_vllm_until_done() -> int:
             # Inside the try: a prep failure must still take the server down with
             # it, or the process exits and leaves vLLM holding GPU 0.
             prepare()
+        if PREP_ONLY == "1":
+            print(f"[r{RANK}] prep-only: corpus ready at {DATA_DIR}", flush=True)
+            return 0
         print(f"[r{RANK}] node {NODE}: serving until training completes", flush=True)
         while not DONE.exists():
             if proc.poll() is not None:
@@ -478,6 +486,9 @@ def main() -> int:
     )
     if IS_VERIFIER:
         return serve_vllm_until_done()
+    if PREP_ONLY == "1":
+        print(f"[r{RANK}] prep-only: nothing to do on a trainer rank", flush=True)
+        return 0
     wait_for_prep()
     return train()
 
