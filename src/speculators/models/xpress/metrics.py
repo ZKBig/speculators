@@ -25,6 +25,7 @@ from speculators.losses import (
     dflash_loss_decay,
     dpace_loss_decay,
 )
+from speculators.models.metrics import compute_accuracy_multi_step
 
 __all__ = [
     "compute_metrics",
@@ -219,9 +220,31 @@ def compute_metrics(  # noqa: C901
         # Top-1 accuracy compares the refined argmax against the DATA token the
         # sequence continued with, not against the teacher's greedy argmax.
         _acc_ref = data_labels if data_labels is not None else targets.argmax(dim=-1)
-        acc_hit = (logits_tf.argmax(dim=-1) == _acc_ref).to(mask_f.dtype)
+        _pred_ids = logits_tf.argmax(dim=-1)
+        acc_hit = (_pred_ids == _acc_ref).to(mask_f.dtype)
         metrics["accuracy_sum"] = (acc_hit * mask_f).sum()
         metrics["accuracy_total"] = mask_f.sum().clamp_min(1.0)
+
+        # Per-slot accuracy, and the expected accept length it implies. The block
+        # average alone cannot show where a refiner earns its keep: the causal
+        # mixer is supposed to help the LATE slots, which are also the ones a
+        # block-parallel drafter gets wrong most often. DFlash and DSpark report
+        # these, so reporting them here too is what makes the three comparable.
+        correct_per_pos, total_per_pos = compute_accuracy_multi_step(
+            _pred_ids, _acc_ref, loss_mask, pos_idx, block_size
+        )
+        start_pos = 0 if sample_from_anchor else 1
+        metrics["full_acc_sum"] = correct_per_pos[start_pos:].sum()
+        metrics["full_acc_total"] = total_per_pos[start_pos:].sum()
+        eal = torch.zeros((), device=device)
+        cum = torch.ones((), device=device)
+        for pos in range(start_pos, block_size):
+            metrics[f"position_{pos}_acc_sum"] = correct_per_pos[pos]
+            metrics[f"position_{pos}_acc_total"] = total_per_pos[pos]
+            cum = cum * correct_per_pos[pos] / total_per_pos[pos].clamp(min=1.0)
+            eal = eal + cum
+        metrics["eal_sum"] = eal
+        metrics["eal_total"] = ones.clone()
         if base_logits is not None:
             base_accept = _overlap(base_logits, targets)
             metrics["base_accept_rate_sum"] = (base_accept * mask_f).sum()
