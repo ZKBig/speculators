@@ -250,6 +250,12 @@ def serve_vllm_until_done() -> int:
         "--port",
         str(VLLM_PORT),
     ]
+    # /render templates and tokenizes; it never runs the model, so it is bound by
+    # the API server process, not the GPU. More servers on the same GPU is what
+    # raises prepare throughput -- more GPUs would do nothing.
+    servers = env("DF2_VLLM_API_SERVERS", "")
+    if servers:
+        cmd += ["--api-server-count", servers]
     bind = env("DF2_VLLM_BIND", "")
     if bind:
         cmd += ["--host", bind]
