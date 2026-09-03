@@ -245,6 +245,21 @@ def compute_metrics(  # noqa: C901
             eal = eal + cum
         metrics["eal_sum"] = eal
         metrics["eal_total"] = ones.clone()
+
+        # DSpark's accept_len, computed the same way so the two runs' curves mean
+        # the same thing: the cumulative product of the per-slot overlap summed
+        # over draft slots, plus the anchor that is always emitted. It differs
+        # from eal above, which multiplies hard argmax hit rates rather than the
+        # soft overlap -- both are "expected accept length" and neither is the
+        # other's number, so both are reported.
+        num_blocks = seq_len // block_size
+        accept_blocks = accept_rate.view(num_blocks, block_size)
+        draft_mask = mask_f.view(num_blocks, block_size)[:, start_pos:]
+        accept_prefix = (accept_blocks[:, start_pos:] * draft_mask).cumprod(dim=-1)
+        per_block_len = accept_prefix.sum(dim=-1) + 1.0
+        block_valid = (draft_mask.sum(dim=-1) > 0).to(accept_rate.dtype)
+        metrics["accept_len_sum"] = (per_block_len * block_valid).sum()
+        metrics["accept_len_total"] = block_valid.sum().clamp_min(1.0)
         if base_logits is not None:
             base_accept = _overlap(base_logits, targets)
             metrics["base_accept_rate_sum"] = (base_accept * mask_f).sum()
