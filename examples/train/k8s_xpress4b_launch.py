@@ -97,6 +97,13 @@ RUN_NAME = env("XP4_RUN_NAME", "xpress-qwen3-4b-8spec")
 # pipeline reaches training at all, and an epoch over millions of samples is a
 # very expensive way to answer it.
 MAX_STEPS = env("XP4_MAX_STEPS", "")
+# Accept length is an eval-only metric: the free-running rollout runs under
+# no_grad in val_epoch, never during training. With one epoch and no interval
+# it is reported exactly once, at the end -- too late to tell whether the head
+# is learning. Counted in optimizer steps, so the cadence is a fixed sample
+# interval whatever the world size.
+EVAL_INTERVAL = env("XP4_EVAL_INTERVAL", "")
+EVAL_MAX_BATCHES = env("XP4_EVAL_MAX_BATCHES", "")
 # Resume is right for a long run and wrong for a smoke test: with --epochs 1,
 # a checkpoint from an earlier attempt makes the trainer conclude the run is
 # already finished and exit in seconds, having trained nothing.
@@ -501,6 +508,10 @@ def train() -> int:
         cmd += ["--val-data-path", VAL_DATA_DIR]
     if MAX_STEPS:
         cmd += ["--max-steps", MAX_STEPS]
+    if EVAL_INTERVAL:
+        cmd += ["--eval-interval", EVAL_INTERVAL]
+    if EVAL_MAX_BATCHES:
+        cmd += ["--eval-max-batches", EVAL_MAX_BATCHES]
     if NO_RESUME == "1":
         cmd += ["--no-resume-from-checkpoint"]
     if TRAIN_RANK == 0:
