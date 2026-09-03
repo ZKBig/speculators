@@ -321,11 +321,25 @@ def prepare() -> None:
     # type, block size, losses, learning rate -- is decided at training time and
     # can reuse the same corpus.
     want = f"{MODEL}|{TRAIN_SRC}|{MAX_SAMPLES or 'all'}|{SEQ_LENGTH}"
+    # A corpus written before MODEL joined the stamp carries the three-field form.
+    # Its bytes are still correct whenever the model matches, and the only way to
+    # know that is that the rest of the stamp does -- so accept it, say so, and
+    # rewrite the stamp rather than re-tokenizing tens of hours of text.
+    legacy = want.split("|", 1)[1]
     if data_is_prepared():
-        if STAMP.exists() and STAMP.read_text() != want:
+        have = STAMP.read_text() if STAMP.exists() else ""
+        if have == legacy:
+            print(
+                f"[r{RANK}] {DATA_DIR} carries a pre-MODEL stamp; assuming {MODEL} "
+                "and upgrading it",
+                flush=True,
+            )
+            STAMP.write_text(want)
+            have = want
+        if STAMP.exists() and have != want:
             sys.exit(
                 f"[r{RANK}] FATAL - {DATA_DIR} was built with different settings.\n"
-                f"  want: {want}\n  have: {STAMP.read_text()}\n"
+                f"  want: {want}\n  have: {have}\n"
                 "Point DSP_DATA_DIR somewhere else rather than overwriting it."
             )
         print(f"[r{RANK}] [skip] {DATA_DIR} already prepared", flush=True)
