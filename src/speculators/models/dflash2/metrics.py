@@ -15,6 +15,7 @@ from speculators.losses import (
     tv_loss,
 )
 from speculators.models.dspark.metrics import compute_metrics as compute_unary_metrics
+from speculators.models.metrics import compute_accuracy_multi_step
 
 __all__ = [
     "compute_metrics",
@@ -191,6 +192,32 @@ def compute_metrics(
             teacher_forced_ids.eq(target_ids).to(valid_float.dtype) * serving_valid
         ).sum()
         metrics["teacher_forced_selector_acc_total"] = serving_total
+
+        # The same accuracy per position, and over EVERY valid position rather
+        # than only those whose target survived into the candidate list. The
+        # position_{k}_acc above comes from the unary logits, so it measures the
+        # backbone without the selector -- the component that distinguishes this
+        # model. A position whose target never made the top-k is a miss here, not
+        # an exclusion, which is what makes these numbers mean the same thing as
+        # another speculator's per-position accuracy.
+        pos_idx = (
+            torch.arange(unary_logits.shape[1], device=unary_logits.device) % block_size
+        ).unsqueeze(0)
+        sel_correct, sel_total = compute_accuracy_multi_step(
+            teacher_forced_ids, target_ids, loss_mask, pos_idx, block_size
+        )
+        start_pos = 0 if sample_from_anchor else 1
+        metrics["selector_full_acc_sum"] = sel_correct[start_pos:].sum()
+        metrics["selector_full_acc_total"] = sel_total[start_pos:].sum()
+        sel_eal = torch.zeros((), device=unary_logits.device)
+        cum = torch.ones((), device=unary_logits.device)
+        for position in range(start_pos, block_size):
+            metrics[f"selector_position_{position}_acc_sum"] = sel_correct[position]
+            metrics[f"selector_position_{position}_acc_total"] = sel_total[position]
+            cum = cum * sel_correct[position] / sel_total[position].clamp(min=1.0)
+            sel_eal = sel_eal + cum
+        metrics["selector_eal_sum"] = sel_eal
+        metrics["selector_eal_total"] = one.clone()
 
         num_blocks = unary_logits.shape[1] // block_size
         contains_target_blocks = contains_target.view(num_blocks, block_size)
