@@ -65,7 +65,11 @@ PREP_WORKERS = env("DSP_PREP_WORKERS", "32")
 
 SEQ_LENGTH = env("DSP_SEQ_LENGTH", "8192")
 TARGET_LAYER_IDS = env("DSP_TARGET_LAYER_IDS", "1 9 17 25 33").split()
-BLOCK_SIZE = env("DSP_BLOCK_SIZE", "9")  # 9 - 1 = 8 speculative tokens
+# 9 slots and 9 speculative tokens: DSpark defaults sample_from_anchor to True,
+# so slot 0 predicts as well instead of carrying the verified anchor. DFlash2 and
+# XPress take the same 9 and draft 8. Distance from the anchor, not the slot
+# index, is what makes their position_{k}_acc curves line up.
+BLOCK_SIZE = env("DSP_BLOCK_SIZE", "9")
 MAX_ANCHORS = env("DSP_MAX_ANCHORS", "512")
 NUM_LAYERS = env("DSP_NUM_LAYERS", "5")
 MARKOV_RANK = env("DSP_MARKOV_RANK", "256")
