@@ -298,7 +298,8 @@ class LossArgs(_Group):
         default=None,
         description="Loss function specification. A name (kl_div, rkl, jsd, ce, tv, "
         'nla, lk_hybrid) or a JSON dict for a weighted combination, e.g. \'{"ce": 0.1, '
-        '"tv": 0.9}\'. (default: "ce" for dflash, "kl_div" otherwise).',
+        '"tv": 0.9}\'. (default: "ce" for dflash, \'{"ce": 0.1, "tv": 0.9}\' for '
+        'xpress, "kl_div" otherwise).',
     )
     ttt_steps: int = Field(
         default=3,
@@ -746,10 +747,11 @@ class TrainConfig(BaseSettings):
         pre-refactor ``parse_args``: unset ``draft_arch`` -> ``llama`` for eagle3 else
         ``qwen3``; unset ``norm_before_fc`` / ``norm_output`` -> ``True`` for eagle3
         else ``False``; unset ``muon_lr`` -> ``10 * lr``; unset ``num_layers`` -> ``5``
-        for dflash/dspark/dflash2 else ``1``; unset ``per_position_loss_weight`` ->
-        ``dpace`` for dflash else ``fixed-exp-decay``; unset ``loss_fn`` -> ``ce`` for
-        dflash else ``kl_div``; unset ``block_size`` -> ``16`` for dflash else
-        ``8``.
+        for dflash/dspark/dflash2/xpress else ``1``; unset
+        ``per_position_loss_weight`` -> ``dpace`` for dflash else
+        ``fixed-exp-decay``; unset ``loss_fn`` -> ``ce`` for dflash,
+        ``{"ce": 0.1, "tv": 0.9}`` for xpress, else ``kl_div``; unset
+        ``block_size`` -> ``16`` for dflash and xpress else ``8``.
 
         The dflash-conditional defaults reflect the recipe from
         https://github.com/vllm-project/speculators/issues/979: this combination
@@ -772,6 +774,7 @@ class TrainConfig(BaseSettings):
         """
         is_eagle3 = self.speculator_type == "eagle3"
         is_dflash = self.speculator_type == "dflash"
+        is_xpress = self.speculator_type == "xpress"
         is_dflash_family = self.speculator_type in {
             "dflash",
             "dspark",
@@ -795,9 +798,13 @@ class TrainConfig(BaseSettings):
                 "dpace" if is_dflash else "fixed-exp-decay"
             )
         if self.loss.loss_fn is None:
-            self.loss.loss_fn = "ce" if is_dflash else "kl_div"
+            if is_xpress:
+                # Matches the validated XPress recipe and the model's own fallback.
+                self.loss.loss_fn = '{"ce": 0.1, "tv": 0.9}'
+            else:
+                self.loss.loss_fn = "ce" if is_dflash else "kl_div"
         if self.dflash.block_size is None:
-            self.dflash.block_size = 16 if is_dflash else 8
+            self.dflash.block_size = 16 if (is_dflash or is_xpress) else 8
         return self
 
     @model_validator(mode="after")
