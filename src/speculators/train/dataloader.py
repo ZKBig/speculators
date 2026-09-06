@@ -8,7 +8,6 @@ if TYPE_CHECKING:
 
 import os
 
-import numpy as np
 import torch
 from torch.utils.data import DataLoader
 
@@ -58,18 +57,10 @@ def _setup_dataloader(
     num_target_layers: int = 3,
     prefetch_factor: int | None = 4,
     preprocess: Callable[[BatchType], BatchType] | None = None,
-    no_packing: bool = False,
 ) -> DataLoader:
-    lengths = dataset.approx_lengths
-    if no_packing:
-        # Feed the packer a constant length equal to the whole token budget, so
-        # every batch holds exactly one conversation per rank. That makes the
-        # global batch a count of CONVERSATIONS (world_size x accumulation_steps)
-        # instead of a token budget, which is the unit a recipe is specified in.
-        lengths = np.full(len(lengths), int(total_seq_len), dtype=np.int64)
     batch_sampler = MultipackDistributedBatchSamplerV2(
         batch_max_length=total_seq_len,
-        lengths=lengths,
+        lengths=dataset.approx_lengths,
         num_replicas=get_dp_size(),
         rank=get_dp_rank(),
     )
@@ -112,9 +103,6 @@ def create_train_val_loaders(
     prefetch_factor: int,
     preprocess: Callable[[BatchType], BatchType] | None,
     train_data_ratio: float = 0.9,
-    no_packing: bool = False,
-    val_data_path: str | None = None,
-    val_transfer: HiddenStatesTransfer | None = None,
 ) -> tuple[DataLoader, DataLoader]:
     """Create training and validation DataLoaders.
 
@@ -125,12 +113,7 @@ def create_train_val_loaders(
     _limit_worker_threads()
     noise_transform = AddUniformNoise(std=noise_std)
 
-    # With a dedicated validation corpus, training uses ALL of data_path and
-    # evaluates on the separate file, so there is no ratio split to make.
-    use_val_path = val_data_path is not None
-    if use_val_path:
-        train_data_ratio = 1.0
-    elif not (0.0 < train_data_ratio < 1.0):
+    if not (0.0 < train_data_ratio < 1.0):
         raise ValueError(f"train_data_ratio must be in (0, 1), got {train_data_ratio}")
 
     train_dataset: BaseDataset = ArrowDataset(
@@ -149,16 +132,14 @@ def create_train_val_loaders(
         max_retries=max_retries,
     )
     val_dataset: BaseDataset = ArrowDataset(
-        datapath=data_path if val_data_path is None else val_data_path,
+        datapath=data_path,
         max_len=total_seq_len,
-        # A separate corpus needs its own cache root, or its file indices would
-        # collide with the training set's under on_generate="cache".
-        transfer=(val_transfer or transfer) if use_val_path else transfer,
+        transfer=transfer,
         vllm_endpoint=vllm_endpoint,
         on_missing=on_missing,
         on_generate=on_generate,
-        train_ratio=1.0 if use_val_path else train_data_ratio,
-        split="train" if use_val_path else "val",
+        train_ratio=train_data_ratio,
+        split="val",
         model=verifier_name_or_path,
         hidden_states_dtype=hidden_states_dtype,
         request_timeout=request_timeout,
@@ -173,7 +154,6 @@ def create_train_val_loaders(
         num_workers=num_workers,
         prefetch_factor=prefetch_factor,
         preprocess=preprocess,
-        no_packing=no_packing,
     )
     val_loader = _setup_dataloader(
         val_dataset,
@@ -183,10 +163,6 @@ def create_train_val_loaders(
         num_workers=num_workers,
         prefetch_factor=prefetch_factor,
         preprocess=preprocess,
-        # Validation must use the SAME batching convention as training: under
-        # no_packing the accept-length metric is measured on single-conversation
-        # windows, not on packed multi-document ones.
-        no_packing=no_packing,
     )
 
     return train_loader, val_loader

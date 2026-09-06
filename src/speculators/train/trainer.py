@@ -7,7 +7,6 @@ from typing import Literal, NamedTuple
 
 import torch
 import torch.distributed as dist
-from rich.errors import LiveError
 from torch.distributed.checkpoint.state_dict import (
     StateDictOptions,
     set_model_state_dict,
@@ -108,11 +107,6 @@ class TrainerConfig(NamedTuple):
     val_call_kwargs: dict | None = None
     optimizer: Literal["adamw", "muon"] = "adamw"
     weight_decay: float = 0.01
-    # Run the accept-length eval every N optimizer steps instead of only at epoch
-    # end. None = epoch end only.
-    eval_interval: int | None = None
-    # Per-rank batch cap for those evals; None sweeps the whole validation set.
-    eval_max_batches: int | None = None
     muon_lr: float = 0.02
     muon_momentum: float = 0.95
     muon_weight_decay: float = 0.1
@@ -556,17 +550,6 @@ class Trainer:
                 )
             self.global_step += 1
 
-            # Mid-epoch accept-length eval. Runs right after an optimizer step, so
-            # the gradients are already applied and zeroed. global_step is identical
-            # on every rank, so all ranks enter val_epoch's collectives together.
-            if (
-                self.config.eval_interval
-                and self.val_loader is not None
-                and self.global_step % self.config.eval_interval == 0
-            ):
-                self.val_epoch(epoch, max_batches=self.config.eval_max_batches)
-                self.model.train()  # val_epoch left it in eval mode
-
             if (
                 self.config.max_steps is not None
                 and self.global_step >= self.config.max_steps
@@ -589,9 +572,7 @@ class Trainer:
             dist.barrier()
 
     @torch.no_grad()
-    def val_epoch(  # noqa: C901
-        self, epoch: int, max_batches: int | None = None
-    ) -> dict[str, float] | None:
+    def val_epoch(self, epoch: int) -> dict[str, float] | None:
         if self.val_loader is None:
             return None
         self.model.eval()
@@ -599,27 +580,11 @@ class Trainer:
             self.val_loader.batch_sampler.set_epoch(epoch)  # type: ignore[union-attr]
         val_loader = self.val_loader
         if self.rank == 0:
-            try:
-                val_loader = tqdm(val_loader, desc=f"Epoch {epoch} [val]")  # type: ignore[assignment]
-            except LiveError:
-                # A mid-epoch eval runs inside train_epoch, whose progress bar is
-                # still live. Older rich allows only one live display and raises
-                # here; newer rich nests them. Detecting which by attribute is
-                # version-fragile, so fall back to no bar rather than ending a
-                # multi-day run over a cosmetic.
-                val_loader = self.val_loader
+            val_loader = tqdm(val_loader, desc=f"Epoch {epoch}")  # type: ignore[assignment]
 
         accumulated: dict[str, torch.Tensor] = {}
         num_batches = len(val_loader)
-        if max_batches is not None:
-            # Every rank must stop after the SAME number of batches or the metric
-            # all-reduce below deadlocks. max_batches is a constant, so they do.
-            num_batches = min(num_batches, max_batches)
-        seen = 0
         for i, batch in enumerate(val_loader):
-            if max_batches is not None and i >= max_batches:
-                break
-            seen = i + 1
             self._maybe_val_sync(i)
             gpu_batch = {
                 k: v.to(self.local_rank, non_blocking=True)
@@ -647,8 +612,7 @@ class Trainer:
             val_metrics = dict(zip(accumulated, stacked.tolist(), strict=True))
 
         world_size = dist.get_world_size() if self.is_distributed else 1
-        divisor = max(1, seen or num_batches)
-        val_metrics = {k: v / divisor for k, v in val_metrics.items()}
+        val_metrics = {k: v / num_batches for k, v in val_metrics.items()}
         val_metrics = normalize_counted_metrics(val_metrics, world_size)
         val_metrics = {f"{k}_epoch": v for k, v in val_metrics.items()}
 
