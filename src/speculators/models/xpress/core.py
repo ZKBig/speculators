@@ -163,6 +163,7 @@ class XPressDraftModel(DFlashDraftModel):
             "base_anchor_floor": kwargs.get("base_anchor_floor"),
             "decayed_loss_norm": kwargs.get("decayed_loss_norm", False),
             "ce_from_data": kwargs.get("ce_from_data", False),
+            "eval_jacobi_passes": kwargs.get("eval_jacobi_passes"),
         }
         return dict(shared), dict(shared)
 
@@ -192,6 +193,7 @@ class XPressDraftModel(DFlashDraftModel):
         base_anchor_full_weight: bool = False,
         decayed_loss_norm: bool = False,
         ce_from_data: bool = False,
+        eval_jacobi_passes: int | None = None,
         **kwargs,
     ):
         (
@@ -286,8 +288,8 @@ class XPressDraftModel(DFlashDraftModel):
                 # The in-training accept-length rollout uses block_size - 1 passes;
                 # num_jacobi_passes (default 6) is the OFFLINE package-eval setting
                 # that converted checkpoints export, so it must not be reused here.
-                _eval_passes = getattr(self.config, "eval_jacobi_passes", None)
-                if not _eval_passes:
+                _eval_passes = eval_jacobi_passes
+                if _eval_passes is None:
                     _eval_passes = self.block_size - 1
                 refined_draft = base_block_logits.argmax(dim=-1)
                 pred = self._draft_to_verifier_ids(refined_draft)

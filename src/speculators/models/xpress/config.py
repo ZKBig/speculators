@@ -53,13 +53,3 @@ class XPressSpeculatorConfig(DFlashSpeculatorConfig):
         description="Inference-time parallel refine passes K (engine-side knob; "
         "stored so converted checkpoints carry the validated default).",
     )
-
-    eval_jacobi_passes: int | None = Field(
-        default=None,
-        description=(
-            "TRAINING-time accept-length rollout passes. None = block_size - 1, "
-            "which is what the in-training accept-length rollout uses; "
-            "num_jacobi_passes (6) is its OFFLINE package-eval setting and is "
-            "exported with the checkpoint, so the two must stay separate."
-        ),
-    )

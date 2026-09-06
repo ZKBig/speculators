@@ -528,6 +528,12 @@ class XPressArgs(_Group):
         description="XPress: inference-time parallel refine passes K (stored in "
         "the exported config; not used during training).",
     )
+    eval_jacobi_passes: int | None = Field(
+        default=None,
+        description="XPress: refine passes used by the in-training accept-length "
+        "rollout. None = block_size - 1. Separate from num_jacobi_passes, which is "
+        "the exported inference setting.",
+    )
     consistency_weight: float = Field(
         default=0.3,
         description="XPress: weight of the free-running Jacobi consistency term "
