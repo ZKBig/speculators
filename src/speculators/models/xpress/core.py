@@ -147,8 +147,9 @@ class XPressDraftModel(DFlashDraftModel):
     @staticmethod
     def get_trainer_kwargs(**kwargs) -> tuple[dict, dict]:
         """Resolve XPress's compound loss and consistency knobs."""
+        implementation = kwargs.get("loss_implementation", "fused")
         shared = {
-            "loss_config": resolve_loss_config(kwargs["loss_fn"]),
+            "loss_config": resolve_loss_config(kwargs["loss_fn"], implementation),
             "gamma": kwargs.get("dflash_decay_gamma", 4.0),
             "max_anchors": kwargs.get("max_anchors", 3072),
             "per_position_loss_weight": kwargs.get(
