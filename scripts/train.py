@@ -697,7 +697,6 @@ def main(cfg: TrainConfig):  # noqa: C901
         val_call_kwargs=val_call_kwargs,
         optimizer=args.optimizer,
         weight_decay=args.weight_decay,
-        fp32_master_weights=args.fp32_master_weights,
         eval_interval=args.eval_interval,
         eval_max_batches=args.eval_max_batches,
         muon_lr=args.muon_lr,
