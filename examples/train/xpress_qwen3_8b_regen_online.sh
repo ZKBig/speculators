@@ -12,9 +12,8 @@
 #   * no fp32 master weights: the bf16 params are clipped (at the same 1.0) and
 #     stepped directly, rather than fp32 copies of them.
 #
-# EVAL protocol: the SEPARATE eval corpus (--val-data-path), single-conversation batches
-# (--no-packing reaches the val loader too), accept length averaged uniformly over
-# conversations, block_size-1 Jacobi passes.
+# EVAL protocol: the held-out split of --data-path (--train-data-ratio), accept length
+# averaged over conversations, block_size-1 Jacobi passes.
 set -Eeuo pipefail
 
 PY=${PY:-python}
@@ -95,18 +94,14 @@ OUT_ROOT=${OUT_ROOT:-/root/speculators_out}
 BACKBONE=$OUT_ROOT/dflash_b16_zlab_converted
 DATA_DIR=${DATA_DIR:-/root/DeepSpec/data}
 TRAIN_JSONL=${TRAIN_JSONL:-$DATA_DIR/qwen3_8B_refiner_train_nothink.jsonl}
-EVAL_JSONL=${EVAL_JSONL:-$DATA_DIR/qwen3_8B_refiner_eval_nothink.jsonl}
 OUTPUT_DIR=$OUT_ROOT/xpress_b16_zlab_8gpu
 TRAIN_DATA=$OUTPUT_DIR/train
-EVAL_DATA=$OUTPUT_DIR/eval
 RUN_NAME=${RUN_NAME:-xpress-b16-speculators-8gpu}
 VLLM_PORT=${VLLM_PORT:-8300}
 RDZV_PORT=${RDZV_PORT:-29610}
 SEQ_LENGTH=4096
 TARGET_LAYER_IDS="1 9 17 25 33"
 MAX_SAMPLES=${MAX_SAMPLES:-1311126}
-EVAL_INTERVAL=${EVAL_INTERVAL:-1000}
-EVAL_MAX_BATCHES=${EVAL_MAX_BATCHES:-}
 LOG_FREQ=${LOG_FREQ:-50}
 mkdir -p "$OUT_ROOT" "$OUTPUT_DIR"
 
@@ -152,7 +147,6 @@ prepare_split () {
     printf '%s' "$want" > "$stamp"
 }
 prepare_split "$TRAIN_JSONL" "$TRAIN_DATA" "$MAX_SAMPLES"
-prepare_split "$EVAL_JSONL"  "$EVAL_DATA"  ""
 
 rm -rf /tmp/hidden_states
 
@@ -180,7 +174,6 @@ CUDA_VISIBLE_DEVICES="1,2,3,4,5,6,7" PYTORCH_CUDA_ALLOC_CONF=expandable_segments
     --verifier-name-or-path "$MODEL" \
     --from-pretrained "$BACKBONE" \
     --data-path "$TRAIN_DATA" \
-    --val-data-path "$EVAL_DATA" \
     --vllm-endpoint "http://localhost:${VLLM_PORT}/v1" \
     --save-path "$OUTPUT_DIR/checkpoints" \
     --epochs 10 \
@@ -200,9 +193,6 @@ CUDA_VISIBLE_DEVICES="1,2,3,4,5,6,7" PYTORCH_CUDA_ALLOC_CONF=expandable_segments
     --base-anchor-weight 0.6 \
     --base-anchor-floor 0.2 \
     --decayed-loss-norm \
-    --no-packing \
-    --eval-interval "$EVAL_INTERVAL" \
-    ${EVAL_MAX_BATCHES:+--eval-max-batches "$EVAL_MAX_BATCHES"} \
     --log-freq "$LOG_FREQ" \
     --ce-from-data \
     --loss-fn '{"ce": 0.1, "tv": 1.8}' \
