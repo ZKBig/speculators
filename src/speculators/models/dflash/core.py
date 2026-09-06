@@ -346,9 +346,6 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             loss_mask,
             max_anchors,
             self.block_size,
-            cap_to_max_valid=bool(
-                getattr(self.config, "anchor_cap_to_max_valid", False)
-            ),
         )
 
         full_attn_mask = None

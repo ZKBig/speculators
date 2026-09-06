@@ -54,15 +54,6 @@ class XPressSpeculatorConfig(DFlashSpeculatorConfig):
         "stored so converted checkpoints carry the validated default).",
     )
 
-    anchor_cap_to_max_valid: bool = Field(
-        default=False,
-        description=(
-            "Anchor sampling: cap the sampled anchors at "
-            "min(max_anchors, valid_candidates - 1) rather than at "
-            "valid_candidates. Worth ~0.3% of supervised blocks."
-        ),
-    )
-
     prefix_valid_mask: bool = Field(
         default=False,
         description=(
