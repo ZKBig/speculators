@@ -709,7 +709,7 @@ class TrainConfig(BaseSettings):
     speculator_type: str = Field(
         default="eagle3",
         description="Type of speculator model to train "
-        "(eagle3, dflash, dflash2, dspark, peagle, mtp).",
+        "(eagle3, dflash, dflash2, dspark, xpress, peagle, mtp).",
     )
     dry_run: bool = Field(
         default=False,
@@ -772,7 +772,12 @@ class TrainConfig(BaseSettings):
         """
         is_eagle3 = self.speculator_type == "eagle3"
         is_dflash = self.speculator_type == "dflash"
-        is_dflash_family = self.speculator_type in {"dflash", "dspark", "dflash2"}
+        is_dflash_family = self.speculator_type in {
+            "dflash",
+            "dspark",
+            "dflash2",
+            "xpress",
+        }
         if self.draft.draft_arch is None:
             self.draft.draft_arch = "llama" if is_eagle3 else "qwen3"
         if self.draft.norm_before_fc is None:
