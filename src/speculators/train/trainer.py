@@ -183,7 +183,6 @@ class Trainer:
         self._anchor_total: int = 1
         self._anchor_now: float = 0.0
         self._anchor_buf: torch.Tensor | None = None
-        self._metric_keys: list[str] | None = None
         self.local_rank = get_local_rank()
         self.rank = get_rank()
         self.train_loader = train_loader
@@ -430,29 +429,6 @@ class Trainer:
         self._anchor_buf.fill_(self._anchor_now)  # type: ignore[union-attr]
         call_kwargs["base_anchor_weight"] = self._anchor_buf
 
-    def _reduce_metrics(self, metrics: dict[str, torch.Tensor]) -> None:
-        """Sum each metric across ranks, in a canonical key order.
-
-        Iterating dict values relies on every rank having built this dict
-        identically; if one rank takes a different branch the reduces pair up
-        mismatched tensors and the logged metrics are silently wrong. Sorting
-        removes the ordering half of that risk; a differing key SET would still
-        misalign, so warn when the key list shifts rather than failing quietly.
-        """
-        keys = sorted(metrics)
-        if self._metric_keys is None:
-            self._metric_keys = keys
-        elif keys != self._metric_keys:
-            root_logger.warning(
-                "metric keys changed between logged steps (%d -> %d); "
-                "cross-rank reduction may be misaligned",
-                len(self._metric_keys),
-                len(keys),
-            )
-            self._metric_keys = keys
-        for key in keys:
-            dist.reduce(metrics[key], dst=0, op=dist.ReduceOp.SUM)
-
     def _prepare_resume_skip(self, epoch: int) -> int:
         """Prepare fast-skip state for mid-epoch resume and return skipped steps."""
         skip_steps = 0
@@ -557,7 +533,8 @@ class Trainer:
                         self._anchor_buf
                     )
                 if self.is_distributed:
-                    self._reduce_metrics(metrics)
+                    for v in metrics.values():
+                        dist.reduce(v, dst=0, op=dist.ReduceOp.SUM)
 
                 metrics = {k: v.item() for k, v in metrics.items()}
                 world_size = dist.get_world_size() if self.is_distributed else 1

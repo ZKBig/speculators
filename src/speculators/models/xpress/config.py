@@ -54,15 +54,6 @@ class XPressSpeculatorConfig(DFlashSpeculatorConfig):
         "stored so converted checkpoints carry the validated default).",
     )
 
-    prefix_valid_mask: bool = Field(
-        default=False,
-        description=(
-            "Loss mask: make the per-block validity mask a PREFIX (cumprod) "
-            "mask -- once a slot is invalid every later slot in the block is "
-            "masked too, because a left-to-right accept can never reach it."
-        ),
-    )
-
     eval_jacobi_passes: int | None = Field(
         default=None,
         description=(

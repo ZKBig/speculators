@@ -485,23 +485,6 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         if not self.config.sample_from_anchor:
             aligned_loss_mask[:, :: self.block_size] = 0
 
-        if getattr(self.config, "prefix_valid_mask", False):
-            # PREFIX (cumprod) validity mask -- once a slot in a block is invalid,
-            # every LATER slot is masked too, because a left-to-right accept can
-            # never reach it. Without this, a block whose
-            # mask dips (an assistant turn ending and a new one starting inside the
-            # same block, or a packed document boundary) is supervised on tokens the
-            # drafter could not have been asked to produce.
-            _blocks = aligned_loss_mask.view(-1, self.block_size)
-            if self.config.sample_from_anchor:
-                _blocks = _blocks.cumprod(dim=1)
-            else:
-                # slot 0 is the anchor (already 0); run the prefix over predictions
-                _blocks = torch.cat(
-                    [_blocks[:, :1], _blocks[:, 1:].cumprod(dim=1)], dim=1
-                )
-            aligned_loss_mask = _blocks.reshape(1, -1)
-
         return (
             hidden,
             logits,
