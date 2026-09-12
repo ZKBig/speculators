@@ -54,6 +54,23 @@ class XPressSpeculatorConfig(DFlashSpeculatorConfig):
         "stored so converted checkpoints carry the validated default).",
     )
 
+    xpress_backbone: Literal["dflash", "dflash2"] = Field(
+        default="dflash",
+        description=(
+            "Drafter backbone under the refiner. 'dflash' (default, matches the "
+            "released checkpoints): plain DFlash decoder layers. 'dflash2': "
+            "DFlash2 layers with the grouped dynamic causal convolution; pair "
+            "with sliding_window_non_causal=True as DFlash2 does."
+        ),
+    )
+    conv_kernel_size: int = Field(
+        default=2, description="dflash2 backbone only: local convolution kernel size."
+    )
+    conv_group_size: int = Field(
+        default=16,
+        description="dflash2 backbone only: channel group size for local convolution.",
+    )
+
     anchor_cap_to_max_valid: bool = Field(
         default=False,
         description=(

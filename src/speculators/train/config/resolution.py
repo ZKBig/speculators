@@ -94,7 +94,7 @@ REQUIRED_FLAGS: dict[str, str] = _required_flags()
 # architecture knobs remain in their own groups. eagle3 uses no group.
 _ALGORITHM_GROUP_USERS: dict[str, frozenset[str]] = {
     "dflash": frozenset({"dflash", "dflash2", "dspark", "xpress"}),
-    "dflash2": frozenset({"dflash2"}),
+    "dflash2": frozenset({"dflash2", "xpress"}),
     "dspark": frozenset({"dspark"}),
     "xpress": frozenset({"xpress"}),
     "peagle": frozenset({"peagle"}),

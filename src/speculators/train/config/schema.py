@@ -560,6 +560,12 @@ class DSparkArgs(_Group):
 class XPressArgs(_Group):
     """XPress-exclusive knobs (causal-refiner head + Jacobi consistency)."""
 
+    xpress_backbone: Literal["dflash", "dflash2"] = Field(
+        default="dflash",
+        description="XPress: drafter backbone under the refiner. 'dflash2' adds "
+        "DFlash2's grouped dynamic convolution (takes --conv-kernel-size / "
+        "--conv-group-size) and defaults sliding_window_non_causal to True.",
+    )
     xpress_rank: int = Field(
         default=256,
         description="XPress: low-rank dim r of the causal-refiner head.",
@@ -812,7 +818,16 @@ class TrainConfig(BaseSettings):
         """
         is_eagle3 = self.speculator_type == "eagle3"
         is_dflash = self.speculator_type == "dflash"
-        is_dflash_family = self.speculator_type in {"dflash", "dspark", "dflash2"}
+        is_dflash_family = self.speculator_type in {
+            "dflash",
+            "dspark",
+            "dflash2",
+            "xpress",
+        }
+        conv_backbone = self.speculator_type == "dflash2" or (
+            self.speculator_type == "xpress"
+            and self.xpress.xpress_backbone == "dflash2"
+        )
         if self.draft.draft_arch is None:
             self.draft.draft_arch = "llama" if is_eagle3 else "qwen3"
         if self.draft.norm_before_fc is None:
@@ -820,7 +835,7 @@ class TrainConfig(BaseSettings):
         if self.draft.norm_output is None:
             self.draft.norm_output = is_eagle3
         if self.draft.sliding_window_non_causal is None:
-            self.draft.sliding_window_non_causal = self.speculator_type == "dflash2"
+            self.draft.sliding_window_non_causal = conv_backbone
         if self.optimizer.muon_lr is None:
             self.optimizer.muon_lr = 10 * self.optimizer.lr
         if self.draft.num_layers is None:

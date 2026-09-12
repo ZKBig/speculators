@@ -6,7 +6,12 @@ from transformers import PretrainedConfig
 
 from speculators.losses import LossConfig, resolve_loss_config
 from speculators.model import SpeculatorModel
+from speculators.models.dflash.config import DFlashSpeculatorConfig
 from speculators.models.dflash.core import DFlashDraftModel
+from speculators.models.dflash2.model_definitions import (
+    GroupedDynamicCausalConv,
+    Qwen3DFlash2DecoderLayer,
+)
 from speculators.models.utils import conditional_torch_compile
 from speculators.models.xpress.config import XPressSpeculatorConfig
 from speculators.models.xpress.metrics import (
@@ -45,6 +50,7 @@ class XPressDraftModel(DFlashDraftModel):
     """
 
     config_class: ClassVar[type[XPressSpeculatorConfig]] = XPressSpeculatorConfig  # type: ignore[misc]
+    _no_split_modules = ["Qwen3DFlashDecoderLayer", "Qwen3DFlash2DecoderLayer"]
 
     def _init_weights(self, module) -> None:
         """Initialize weights HF's ``from_pretrained`` reports as missing.
@@ -61,6 +67,10 @@ class XPressDraftModel(DFlashDraftModel):
                 module.bias.data.zero_()
         elif isinstance(module, nn.Embedding):
             module.weight.data.normal_(mean=0.0, std=0.02)
+        elif isinstance(module, GroupedDynamicCausalConv):
+            # dflash2 backbone: base_kernel is a raw Parameter the Linear branch
+            # above never sees; use DFlash2's own init (identity-ish taps).
+            module.reset_parameters()
         elif isinstance(module, XPressRefinerHead):
             # raw mixer starts at zero (validated recipe: mixer_init=zeros);
             # the causal tril + identity are applied functionally in forward.
@@ -110,6 +120,10 @@ class XPressDraftModel(DFlashDraftModel):
 
     def __init__(self, config: XPressSpeculatorConfig) -> None:
         super().__init__(config=config)
+        if config.xpress_backbone == "dflash2":
+            for layer_ in self.layers:
+                assert isinstance(layer_, Qwen3DFlash2DecoderLayer)  # noqa: S101
+                layer_.reset_convolutions()
         self.refiner_head = XPressRefinerHead(
             verifier_vocab_size=self.verifier_vocab_size,
             draft_vocab_size=self.draft_vocab_size,
@@ -119,6 +133,18 @@ class XPressDraftModel(DFlashDraftModel):
             mlp_ratio=config.xpress_mlp_ratio,
         )
         self.post_init()
+
+    def _make_decoder_layer(self, config: DFlashSpeculatorConfig, layer_idx: int):
+        assert isinstance(config, XPressSpeculatorConfig)  # noqa: S101
+        if config.xpress_backbone != "dflash2":
+            return super()._make_decoder_layer(config, layer_idx)
+        return Qwen3DFlash2DecoderLayer(
+            config.transformer_layer_config,  # type: ignore[arg-type]
+            layer_idx,
+            block_size=config.block_size,
+            conv_kernel_size=config.conv_kernel_size,
+            conv_group_size=config.conv_group_size,
+        )
 
     @classmethod
     def from_training_args(
@@ -130,11 +156,20 @@ class XPressDraftModel(DFlashDraftModel):
     ) -> "XPressDraftModel":
         """Create an XPress model from training arguments (mirrors DSpark)."""
         sample_from_anchor_arg = kwargs.get("sample_from_anchor")
+        backbone = kwargs.get("xpress_backbone", "dflash")
+        base_kwargs = cls._build_base_config_kwargs("xpress", verifier_config, **kwargs)
+        if backbone == "dflash2" and kwargs.get("sliding_window_non_causal") is None:
+            # DFlash2's default; the base builder only applies it for algorithm
+            # "dflash2", and here the algorithm stays "xpress".
+            base_kwargs["sliding_window_non_causal"] = True
         config = XPressSpeculatorConfig(
-            **cls._build_base_config_kwargs("xpress", verifier_config, **kwargs),
+            **base_kwargs,
             xpress_rank=kwargs.get("xpress_rank", 256),
             xpress_mlp_ratio=kwargs.get("xpress_mlp_ratio", 2),
             num_jacobi_passes=kwargs.get("num_jacobi_passes", 6),
+            xpress_backbone=backbone,
+            conv_kernel_size=kwargs.get("conv_kernel_size", 2),
+            conv_group_size=kwargs.get("conv_group_size", 16),
         )
         if sample_from_anchor_arg is not None:
             config.sample_from_anchor = sample_from_anchor_arg

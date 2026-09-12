@@ -71,6 +71,12 @@ TARGET_LAYER_IDS = env("XP4_TARGET_LAYER_IDS", "1 9 17 25 33").split()
 BLOCK_SIZE = env("XP4_BLOCK_SIZE", "9")  # 9 - 1 = 8 speculative tokens
 MAX_ANCHORS = env("XP4_MAX_ANCHORS", "512")
 NUM_LAYERS = env("XP4_NUM_LAYERS", "5")
+# "dflash" (the released layout) or "dflash2": DFlash2's decoder layers with the
+# grouped dynamic convolution under the same refiner. Conv knobs follow DFlash2's
+# defaults and only matter for the dflash2 backbone.
+XPRESS_BACKBONE = env("XP4_XPRESS_BACKBONE", "dflash")
+CONV_KERNEL_SIZE = env("XP4_CONV_KERNEL_SIZE", "2")
+CONV_GROUP_SIZE = env("XP4_CONV_GROUP_SIZE", "16")
 XPRESS_RANK = env("XP4_XPRESS_RANK", "256")
 XPRESS_MLP_RATIO = env("XP4_XPRESS_MLP_RATIO", "2")
 # K at inference. Stored in the exported config; training does not use it.
@@ -452,6 +458,12 @@ def train() -> int:
         NUM_LAYERS,
         "--target-layer-ids",
         *TARGET_LAYER_IDS,
+        "--xpress-backbone",
+        XPRESS_BACKBONE,
+        "--conv-kernel-size",
+        CONV_KERNEL_SIZE,
+        "--conv-group-size",
+        CONV_GROUP_SIZE,
         "--xpress-rank",
         XPRESS_RANK,
         "--xpress-mlp-ratio",

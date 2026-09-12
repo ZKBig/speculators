@@ -75,6 +75,20 @@ def test_flatten_resolves_dflash2_derived_defaults():
     assert flat["sliding_window_non_causal"] is True
 
 
+def test_flatten_resolves_xpress_backbone_defaults():
+    plain = TrainConfig(speculator_type="xpress").flatten()
+    assert plain["num_layers"] == 5
+    assert plain["xpress_backbone"] == "dflash"
+    assert plain["sliding_window_non_causal"] is False
+
+    conv = TrainConfig(
+        speculator_type="xpress", xpress={"xpress_backbone": "dflash2"}
+    ).flatten()
+    assert conv["sliding_window_non_causal"] is True
+    assert conv["conv_kernel_size"] == 2
+    assert conv["conv_group_size"] == 16
+
+
 def test_flatten_leaves_non_dflash_derived_defaults_unchanged():
     # DSpark shares only the DFlash layer default; the remaining derived defaults
     # keep their pre-existing behavior.
