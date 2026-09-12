@@ -8,7 +8,12 @@ from speculators.losses import LossConfig, resolve_loss_config
 from speculators.model import SpeculatorModel
 from speculators.models.dflash.config import DFlashSpeculatorConfig
 from speculators.models.dflash.core import DFlashDraftModel
+from speculators.models.dflash2.metrics import (
+    compute_selector_loss,
+    selector_training_candidates,
+)
 from speculators.models.dflash2.model_definitions import (
+    CandidateSelector,
     GroupedDynamicCausalConv,
     Qwen3DFlash2DecoderLayer,
 )
@@ -67,6 +72,9 @@ class XPressDraftModel(DFlashDraftModel):
                 module.bias.data.zero_()
         elif isinstance(module, nn.Embedding):
             module.weight.data.normal_(mean=0.0, std=0.02)
+        elif isinstance(module, CandidateSelector):
+            module.predecessor_codebook.data.normal_(mean=0.0, std=0.02)
+            module.successor_codebook.data.normal_(mean=0.0, std=0.02)
         elif isinstance(module, GroupedDynamicCausalConv):
             # dflash2 backbone: base_kernel is a raw Parameter the Linear branch
             # above never sees; use DFlash2's own init (identity-ish taps).
@@ -132,6 +140,23 @@ class XPressDraftModel(DFlashDraftModel):
             rank=config.xpress_rank,
             mlp_ratio=config.xpress_mlp_ratio,
         )
+        self.candidate_selector: CandidateSelector | None = None
+        if config.xpress_selector:
+            if self.draft_vocab_size != self.verifier_vocab_size:
+                raise ValueError(
+                    "xpress_selector requires the full verifier vocabulary: "
+                    f"draft_vocab_size={self.draft_vocab_size}, "
+                    f"verifier_vocab_size={self.verifier_vocab_size}."
+                )
+            self.candidate_selector = CandidateSelector(
+                vocab_size=self.verifier_vocab_size,
+                hidden_size=config.transformer_layer_config.hidden_size,
+                rank=config.selector_rank,
+                top_k=config.selector_top_k,
+                initializer_range=getattr(
+                    config.transformer_layer_config, "initializer_range", 0.02
+                ),
+            )
         self.post_init()
 
     def _make_decoder_layer(self, config: DFlashSpeculatorConfig, layer_idx: int):
@@ -170,6 +195,9 @@ class XPressDraftModel(DFlashDraftModel):
             xpress_backbone=backbone,
             conv_kernel_size=kwargs.get("conv_kernel_size", 2),
             conv_group_size=kwargs.get("conv_group_size", 16),
+            xpress_selector=bool(kwargs.get("xpress_selector", False)),
+            selector_rank=kwargs.get("selector_rank", 256),
+            selector_top_k=kwargs.get("selector_top_k", 16),
         )
         if sample_from_anchor_arg is not None:
             config.sample_from_anchor = sample_from_anchor_arg
@@ -197,6 +225,7 @@ class XPressDraftModel(DFlashDraftModel):
             "base_anchor_floor": kwargs.get("base_anchor_floor"),
             "decayed_loss_norm": kwargs.get("decayed_loss_norm", False),
             "ce_from_data": kwargs.get("ce_from_data", False),
+            "selector_loss_alpha": kwargs.get("selector_loss_alpha", 1.0),
         }
         return dict(shared), dict(shared)
 
@@ -205,6 +234,41 @@ class XPressDraftModel(DFlashDraftModel):
         if self.d2t is not None:
             return draft_ids + self.d2t[draft_ids]
         return draft_ids
+
+    def _selector_seed(
+        self,
+        base_block_logits: torch.Tensor,  # [num_blocks, block, vocab]
+        hidden_blocks: torch.Tensor,  # [num_blocks, block, hidden]
+        anchor_tokens: torch.Tensor,  # [num_blocks, 1]
+    ) -> torch.Tensor:
+        """DFlash2's greedy selector walk, as the Jacobi starting point.
+
+        Per slot, score the unary top-k against the token the walk chose for the
+        previous slot and take the best; slot 0 is the anchor under fill-in. Same
+        recurrence as vLLM's ``_selector_walk_kernel`` at temperature 0.
+        """
+        selector = self.candidate_selector
+        assert selector is not None  # noqa: S101
+        logits = base_block_logits.detach()
+        hidden = hidden_blocks.detach().to(selector.hidden_projection.weight.dtype)
+        candidates = logits.topk(selector.top_k, dim=-1).indices  # [B, S, k]
+        unary = logits.gather(-1, candidates).float()
+        out = torch.empty_like(candidates[..., 0])
+        prev = anchor_tokens[:, 0]
+        first = 0 if self.config.sample_from_anchor else 1
+        if first == 1:
+            out[:, 0] = prev
+        for slot in range(first, out.shape[1]):
+            scores = (
+                unary[:, slot]
+                + selector.transition_scores(
+                    hidden[:, slot], prev, candidates[:, slot]
+                ).float()
+            )
+            best = scores.argmax(dim=-1)
+            prev = candidates[:, slot].gather(1, best.unsqueeze(1)).squeeze(1)
+            out[:, slot] = prev
+        return out
 
     @conditional_torch_compile
     def forward(  # noqa: C901
@@ -226,6 +290,7 @@ class XPressDraftModel(DFlashDraftModel):
         base_anchor_full_weight: bool = False,
         decayed_loss_norm: bool = False,
         ce_from_data: bool = False,
+        selector_loss_alpha: float = 1.0,
         **kwargs,
     ):
         (
@@ -296,11 +361,15 @@ class XPressDraftModel(DFlashDraftModel):
         bias_tf = self.refiner_head.block_bias(prev_tf, hcache=hcache)
         logits_tf = (base_block_logits + bias_tf).view(1, mask_tokens_size, -1)
 
+        seed = (
+            self._selector_seed(base_block_logits, hidden_blocks, anchor_tokens)
+            if self.candidate_selector is not None
+            else self._draft_to_verifier_ids(base_block_logits.detach().argmax(dim=-1))
+        )
+
         round_logits: list[torch.Tensor] = []
         if consistency_weight > 0.0 and consistency_passes > 0:
-            pred = self._draft_to_verifier_ids(
-                base_block_logits.detach().argmax(dim=-1)
-            )
+            pred = seed.clone()
             for _ in range(int(consistency_passes)):
                 if self.config.sample_from_anchor:
                     prev_j = torch.cat([anchor_tokens, pred[:, :-1]], dim=1)
@@ -323,8 +392,8 @@ class XPressDraftModel(DFlashDraftModel):
                 _eval_passes = getattr(self.config, "eval_jacobi_passes", None)
                 if not _eval_passes:
                     _eval_passes = self.block_size - 1
-                refined_draft = base_block_logits.argmax(dim=-1)
-                pred = self._draft_to_verifier_ids(refined_draft)
+                refined_draft = seed.clone()
+                pred = seed.clone()
                 for _ in range(int(_eval_passes)):
                     if self.config.sample_from_anchor:
                         prev_j = torch.cat([anchor_tokens, pred[:, :-1]], dim=1)
@@ -392,5 +461,32 @@ class XPressDraftModel(DFlashDraftModel):
             ce_data_labels=ce_data_labels,
             data_labels=data_labels,
         )
+        if self.candidate_selector is not None and selector_loss_alpha > 0.0:
+            # DFlash2's K-way objective on the unary top-k, teacher-forced on the
+            # same prev tokens the refiner sees.
+            unary = logits
+            top_k = self.candidate_selector.top_k
+            candidate_ids = unary.detach().topk(top_k, dim=-1).indices
+            training_candidate_ids, target_positions, _ = selector_training_candidates(
+                candidate_ids, targets.argmax(dim=-1)
+            )
+            candidate_logits = self.candidate_selector.score_candidates(
+                unary,
+                hidden,
+                prev_tf.reshape(1, mask_tokens_size),
+                training_candidate_ids,
+            )
+            selector_loss = compute_selector_loss(
+                candidate_logits,
+                target_positions,
+                aligned_loss_mask,
+                self.block_size,
+                gamma=gamma,
+                per_position_loss_weight=per_position_loss_weight,
+                dpace_alpha=dpace_alpha,
+                sample_from_anchor=self.config.sample_from_anchor,
+            )
+            loss = loss + selector_loss_alpha * selector_loss
+            metrics["selector_loss"] = selector_loss.detach()
         metrics.update(rollout_metrics)
         return None, loss, metrics

@@ -87,6 +87,8 @@ def test_flatten_resolves_xpress_backbone_defaults():
     assert conv["sliding_window_non_causal"] is True
     assert conv["conv_kernel_size"] == 2
     assert conv["conv_group_size"] == 16
+    assert plain["xpress_selector"] is False
+    assert conv["selector_top_k"] == 16
 
 
 def test_flatten_leaves_non_dflash_derived_defaults_unchanged():

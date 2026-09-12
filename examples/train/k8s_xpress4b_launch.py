@@ -77,6 +77,12 @@ NUM_LAYERS = env("XP4_NUM_LAYERS", "5")
 XPRESS_BACKBONE = env("XP4_XPRESS_BACKBONE", "dflash")
 CONV_KERNEL_SIZE = env("XP4_CONV_KERNEL_SIZE", "2")
 CONV_GROUP_SIZE = env("XP4_CONV_GROUP_SIZE", "16")
+# "1" adds DFlash2's candidate selector beside the refiner (its walk seeds the
+# Jacobi passes); selector knobs follow DFlash2's defaults.
+XPRESS_SELECTOR = env("XP4_XPRESS_SELECTOR", "0")
+SELECTOR_RANK = env("XP4_SELECTOR_RANK", "256")
+SELECTOR_TOP_K = env("XP4_SELECTOR_TOP_K", "16")
+SELECTOR_LOSS_ALPHA = env("XP4_SELECTOR_LOSS_ALPHA", "1.0")
 XPRESS_RANK = env("XP4_XPRESS_RANK", "256")
 XPRESS_MLP_RATIO = env("XP4_XPRESS_MLP_RATIO", "2")
 # K at inference. Stored in the exported config; training does not use it.
@@ -464,6 +470,19 @@ def train() -> int:
         CONV_KERNEL_SIZE,
         "--conv-group-size",
         CONV_GROUP_SIZE,
+        *(
+            [
+                "--xpress-selector",
+                "--selector-rank",
+                SELECTOR_RANK,
+                "--selector-top-k",
+                SELECTOR_TOP_K,
+                "--selector-loss-alpha",
+                SELECTOR_LOSS_ALPHA,
+            ]
+            if XPRESS_SELECTOR == "1"
+            else []
+        ),
         "--xpress-rank",
         XPRESS_RANK,
         "--xpress-mlp-ratio",

@@ -71,6 +71,23 @@ class XPressSpeculatorConfig(DFlashSpeculatorConfig):
         description="dflash2 backbone only: channel group size for local convolution.",
     )
 
+    xpress_selector: bool = Field(
+        default=False,
+        description=(
+            "Add DFlash2's bilinear candidate selector next to the refiner. Its "
+            "greedy walk over the unary top-k seeds the Jacobi passes (training "
+            "consistency rounds and inference alike) instead of the per-slot "
+            "argmax, and it is trained with DFlash2's K-way selector loss. "
+            "Requires the full verifier vocabulary."
+        ),
+    )
+    selector_rank: int = Field(
+        default=256, description="xpress_selector only: codebook rank."
+    )
+    selector_top_k: int = Field(
+        default=16, description="xpress_selector only: unary candidates per slot."
+    )
+
     anchor_cap_to_max_valid: bool = Field(
         default=False,
         description=(

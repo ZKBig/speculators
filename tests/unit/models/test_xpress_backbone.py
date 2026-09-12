@@ -127,3 +127,74 @@ def test_config_round_trip_keeps_backbone_choice(tmp_path):
     assert loaded.xpress_backbone == "dflash2"
     assert loaded.conv_group_size == 4
     assert loaded.sliding_window_non_causal is True
+
+
+def test_selector_is_off_by_default():
+    model = XPressDraftModel(_tiny_config())
+    assert model.candidate_selector is None
+    assert not any(k.startswith("candidate_selector.") for k in model.state_dict())
+
+
+def test_selector_seed_walks_from_the_anchor():
+    """Slot 0 carries the anchor; every later slot is one of its unary top-k."""
+    torch.manual_seed(0)
+    model = XPressDraftModel(_tiny_config(xpress_selector=True, selector_top_k=4))
+    _finite_init(model)
+    num_blocks, block, vocab = 3, model.block_size, model.verifier_vocab_size
+    hidden = model.config.transformer_layer_config.hidden_size
+    logits = torch.randn(num_blocks, block, vocab)
+    hidden_blocks = torch.randn(num_blocks, block, hidden)
+    anchors = torch.randint(0, vocab, (num_blocks, 1))
+
+    seed = model._selector_seed(logits, hidden_blocks, anchors)  # noqa: SLF001
+
+    assert seed.shape == (num_blocks, block)
+    assert torch.equal(seed[:, 0], anchors[:, 0])
+    top = logits.topk(4, dim=-1).indices
+    assert (seed[:, 1:, None] == top[:, 1:]).any(dim=-1).all()
+
+
+def test_selector_trains_with_the_refiner_on_the_dflash2_backbone():
+    """Full stack: conv backbone + selector + refiner, one step reaches all three."""
+    torch.manual_seed(0)
+    model = XPressDraftModel(
+        _tiny_config(xpress_backbone="dflash2", xpress_selector=True, selector_top_k=4)
+    )
+    _finite_init(model)
+    _, loss, metrics = model(  # type: ignore[call-arg]
+        **_inputs(model),
+        max_anchors=4,
+        loss_config=resolve_loss_config("kl_div", "eager"),
+        consistency_passes=1,
+    )
+    assert torch.isfinite(loss)
+    assert "selector_loss" in metrics and torch.isfinite(metrics["selector_loss"])
+    loss.backward()
+    for fragment in ("attention_conv", "candidate_selector", "refiner_head"):
+        grads = [
+            p.grad
+            for n, p in model.named_parameters()
+            if fragment in n and p.grad is not None
+        ]
+        assert grads, f"no gradient reached {fragment}"
+        assert any(torch.count_nonzero(g) for g in grads), (
+            f"zero gradient for {fragment}"
+        )
+
+
+def test_selector_loss_alpha_zero_drops_the_selector_term():
+    torch.manual_seed(0)
+    model = XPressDraftModel(_tiny_config(xpress_selector=True, selector_top_k=4))
+    _finite_init(model)
+    _, loss, metrics = model(  # type: ignore[call-arg]
+        **_inputs(model),
+        max_anchors=4,
+        loss_config=resolve_loss_config("kl_div", "eager"),
+        consistency_passes=0,
+        consistency_weight=0.0,
+        selector_loss_alpha=0.0,
+    )
+    assert "selector_loss" not in metrics
+    loss.backward()
+    codebook = model.candidate_selector.successor_codebook  # type: ignore[union-attr]
+    assert codebook.grad is None or torch.count_nonzero(codebook.grad) == 0

@@ -566,6 +566,12 @@ class XPressArgs(_Group):
         "DFlash2's grouped dynamic convolution (takes --conv-kernel-size / "
         "--conv-group-size) and defaults sliding_window_non_causal to True.",
     )
+    xpress_selector: bool = Field(
+        default=False,
+        description="XPress: add DFlash2's candidate selector; its greedy walk "
+        "seeds the Jacobi passes. Takes --selector-rank / --selector-top-k / "
+        "--selector-loss-alpha.",
+    )
     xpress_rank: int = Field(
         default=256,
         description="XPress: low-rank dim r of the causal-refiner head.",
