@@ -75,6 +75,9 @@ NUM_LAYERS = env("DSP_NUM_LAYERS", "5")
 MARKOV_RANK = env("DSP_MARKOV_RANK", "256")
 MARKOV_HEAD_TYPE = env("DSP_MARKOV_HEAD_TYPE", "vanilla")  # vanilla | gated | rnn
 CONFIDENCE_HEAD_ALPHA = env("DSP_CONFIDENCE_HEAD_ALPHA", "1.0")
+# "0" trains the Markov head alone: no confidence head, no confidence loss. The
+# exported config records enable_confidence_head=false, which vLLM honors.
+ENABLE_CONFIDENCE_HEAD = env("DSP_ENABLE_CONFIDENCE_HEAD", "1")
 LOSS_FN = env("DSP_LOSS_FN", '{"ce": 0.1, "tv": 0.9}')
 DECAY_GAMMA = env("DSP_DECAY_GAMMA", "4.0")
 EPOCHS = env("DSP_EPOCHS", "1")
@@ -447,10 +450,16 @@ def train() -> int:
         MARKOV_RANK,
         "--markov-head-type",
         MARKOV_HEAD_TYPE,
-        "--enable-confidence-head",
-        "--confidence-head-with-markov",
-        "--confidence-head-alpha",
-        CONFIDENCE_HEAD_ALPHA,
+        *(
+            [
+                "--enable-confidence-head",
+                "--confidence-head-with-markov",
+                "--confidence-head-alpha",
+                CONFIDENCE_HEAD_ALPHA,
+            ]
+            if ENABLE_CONFIDENCE_HEAD == "1"
+            else ["--no-enable-confidence-head"]
+        ),
         "--loss-fn",
         LOSS_FN,
         "--dflash-decay-gamma",
