@@ -30,7 +30,7 @@ def env(name: str, default: str) -> str:
 
 MODEL = env("G4_MODEL", "google/gemma-4-26b-a4b-it")
 OUT_DIR = Path(env("G4_OUT_DIR", "/gpfs/zwang33/gemma4/regen"))
-PRESETS = env("G4_PRESETS", "sharegpt ultrachat magpie gsm8k nemotron").split()
+PRESETS = env("G4_PRESETS", "open_perfectblend").split()
 DP_SIZE = env("G4_DP_SIZE", "8")
 MAX_MODEL_LEN = env("G4_MAX_MODEL_LEN", "16384")
 MAX_TOKENS = env("G4_MAX_TOKENS", "8192")
