@@ -73,7 +73,7 @@ def main() -> int:
         # Text-only: the HF repo is multimodal; no image slots keeps the
         # vision tower out of memory and the chat template text-only.
         "--limit-mm-per-prompt",
-        '{"image": 0, "audio": 0}',
+        '{"image": 0, "audio": 0, "video": 0}',
     ]
     extra = env("G4_VLLM_EXTRA_ARGS", "")
     if extra:
