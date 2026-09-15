@@ -28,6 +28,37 @@ def env(name: str, default: str) -> str:
     return os.environ.get(name, default)
 
 
+_DIST_VARS = (
+    "RANK",
+    "WORLD_SIZE",
+    "LOCAL_RANK",
+    "LOCAL_WORLD_SIZE",
+    "GROUP_RANK",
+    "GROUP_WORLD_SIZE",
+    "MASTER_ADDR",
+    "MASTER_PORT",
+    # torchrun sets TORCHELASTIC_USE_AGENT_STORE=True for its workers, and torch's
+    # TCP rendezvous reads it: with it set, init_process_group builds a CLIENT
+    # store and waits for the agent to be listening. vLLM is not part of this job,
+    # so its TP/DP workers wait for a listener that does not exist -- the engine
+    # never loads a byte and the API server times out. mainProgram runs under
+    # torchrun, so this environment is inherited unless it is stripped here.
+    "TORCHELASTIC_USE_AGENT_STORE",
+    "TORCHELASTIC_RESTART_COUNT",
+    "TORCHELASTIC_MAX_RESTARTS",
+    "TORCHELASTIC_RUN_ID",
+    "TORCHELASTIC_ERROR_FILE",
+)
+
+
+def child_env() -> dict:
+    """Environment for the vLLM server and the regeneration client."""
+    e = dict(os.environ)
+    for v in _DIST_VARS:
+        e.pop(v, None)
+    return e
+
+
 MODEL = env("G4_MODEL", "google/gemma-4-26b-a4b-it")
 OUT_DIR = Path(env("G4_OUT_DIR", "/gpfs/zwang33/gemma4/regen"))
 PRESETS = env("G4_PRESETS", "open_perfectblend").split()
@@ -55,6 +86,7 @@ def main() -> int:
     if int(env("LOCAL_RANK", "0")) != 0:
         return 0
     OUT_DIR.mkdir(parents=True, exist_ok=True)
+    child = child_env()
 
     serve = [
         VLLM_PY,
@@ -79,7 +111,7 @@ def main() -> int:
     if extra:
         serve += extra.split()
     print("[regen] $", " ".join(serve), flush=True)
-    server = subprocess.Popen(serve, cwd=REPO)
+    server = subprocess.Popen(serve, cwd=REPO, env=child)
     try:
         t0 = time.time()
         while not healthy():
@@ -118,7 +150,7 @@ def main() -> int:
                 cmd += ["--sampling-params", SAMPLING]
             print(f"[regen] {preset} -> {outfile}", flush=True)
             print("[regen] $", " ".join(cmd), flush=True)
-            rc = subprocess.run(cmd, cwd=REPO).returncode
+            rc = subprocess.run(cmd, cwd=REPO, env=child).returncode
             if rc != 0:
                 print(f"[regen] {preset} failed rc={rc}", flush=True)
                 return rc
