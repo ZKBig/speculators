@@ -71,6 +71,14 @@ TARGET_LAYER_IDS = env("XP4_TARGET_LAYER_IDS", "1 9 17 25 33").split()
 BLOCK_SIZE = env("XP4_BLOCK_SIZE", "9")  # 9 - 1 = 8 speculative tokens
 MAX_ANCHORS = env("XP4_MAX_ANCHORS", "512")
 NUM_LAYERS = env("XP4_NUM_LAYERS", "5")
+# Define the draft decoder from an existing DFlash drafter instead of the shaping
+# flags (XP4_NUM_LAYERS is then not passed: the two are mutually exclusive), and
+# optionally start training from that drafter's backbone weights. Set both to
+# the same drafter (e.g. z-lab/gemma-4-26B-A4B-it-DFlash) so the shapes agree;
+# XP4_TARGET_LAYER_IDS must then be that drafter's target layers in eagle_aux
+# indexing (its dflash_config.target_layer_ids + 1).
+DRAFT_CONFIG = env("XP4_DRAFT_CONFIG", "")
+INIT_BACKBONE = env("XP4_INIT_BACKBONE", "")
 # "dflash" (the released layout) or "dflash2": DFlash2's decoder layers with the
 # grouped dynamic convolution under the same refiner. Conv knobs follow DFlash2's
 # defaults and only matter for the dflash2 backbone.
@@ -303,6 +311,12 @@ def serve_vllm_until_done() -> int:
     # uses the model's own context and truncation happens where it should.
     if env("XP4_VLLM_MAX_MODEL_LEN", "0") == "1":
         cmd += ["--max-model-len", str(int(SEQ_LENGTH) + 2)]
+    # Verbatim extra `vllm serve` flags, split on whitespace: keep JSON values
+    # space-free. Gemma 4 needs --limit-mm-per-prompt {"image":0,"audio":0,"video":0}
+    # to load text-only, and --gpu-memory-utilization for a 26B model on one GPU.
+    extra = env("XP4_VLLM_EXTRA_ARGS", "")
+    if extra:
+        cmd += extra.split()
     print(f"[r{RANK}] node {NODE}: verifier on GPU 0 ({VLLM_PY})", flush=True)
     proc = subprocess.Popen(cmd, env=e, cwd=REPO)
     for i in range(360):  # up to 30 min
@@ -460,8 +474,12 @@ def train() -> int:
         BLOCK_SIZE,
         "--max-anchors",
         MAX_ANCHORS,
-        "--num-layers",
-        NUM_LAYERS,
+        *(
+            ["--draft-config", DRAFT_CONFIG]
+            if DRAFT_CONFIG
+            else ["--num-layers", NUM_LAYERS]
+        ),
+        *(["--init-backbone-from", INIT_BACKBONE] if INIT_BACKBONE else []),
         "--target-layer-ids",
         *TARGET_LAYER_IDS,
         "--xpress-backbone",

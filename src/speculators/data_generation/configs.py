@@ -109,7 +109,7 @@ DATASET_CONFIGS: dict[str, DatasetConfig] = {
         hf_path="Aeala/ShareGPT_Vicuna_unfiltered",
         split="train",
     ),
-    # 1.51M ShareGPT-format conversations blending MetaMathQA, UltraInteract,
+    # 1,420,909 ShareGPT-format conversations blending MetaMathQA, UltraInteract,
     # ultrachat, orca-math, ultrafeedback, evol-codealpaca, AutoIF and lmsys-arena
     # (Apache 2.0). Same from/value turns as "sharegpt", so no normalizer.
     "open_perfectblend": DatasetConfig(

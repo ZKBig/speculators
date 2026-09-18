@@ -81,6 +81,15 @@ class DraftArgs(_Group):
         "(--num-layers, --draft-arch, --draft-hidden-act, --sliding-window, "
         "--full-attention-indices).",
     )
+    init_backbone_from: str = Field(
+        default="",
+        description="HF id or local directory of a DFlash-format drafter (e.g. "
+        "z-lab/<target>-DFlash) whose backbone tensors -- fc, hidden_norm, norm and "
+        "layers.* -- initialise the draft decoder before training. Everything the "
+        "drafter does not define (the refiner head, verifier-derived embeddings and "
+        "lm_head) keeps its normal initialisation. Composable with --draft-config, "
+        "which should then be the same drafter so the shapes agree.",
+    )
     draft_config: str = Field(
         default="",
         description="HF id, directory, or JSON path of a decoder config (LlamaConfig "

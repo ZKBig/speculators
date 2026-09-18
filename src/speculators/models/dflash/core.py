@@ -128,6 +128,13 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             eps=config.transformer_layer_config.rms_norm_eps,  # type: ignore[arg-type]
         )
         self.verifier_norm.weight.requires_grad = False
+        # Gemma-family verifiers squash their final logits with
+        # cap * tanh(logits / cap) before the softmax. The distillation target
+        # must see the same distribution the verifier actually samples from, so
+        # the cap is applied here too; None (Qwen, Llama, ...) is a no-op.
+        self.final_logit_softcapping: float | None = getattr(
+            config.transformer_layer_config, "final_logit_softcapping", None
+        )
         self.block_size = config.block_size
 
         # Warn if using DFlash with sample_from_anchor=True (may not be supported)
@@ -157,6 +164,12 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         self.__dict__["_keys_to_ignore_on_load_missing"] = (
             keys_to_ignore_on_load_missing
         )
+
+    def _softcap(self, logits: torch.Tensor) -> torch.Tensor:
+        cap = self.final_logit_softcapping
+        if cap is None:
+            return logits
+        return torch.tanh(logits / cap) * cap
 
     @property
     def target_layer_ids(self) -> list[int]:
@@ -445,12 +458,15 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
                     if self.config.sample_from_anchor
                     else (anchored_block_indices - 1) % total_seq_len
                 )
-                targets = self.verifier_lm_head(
-                    self.verifier_norm(verifier_last_hidden_states[:, target_indices])
+                normed = self.verifier_norm(
+                    verifier_last_hidden_states[:, target_indices]
                 )
+                targets = self._softcap(self.verifier_lm_head(normed))
             else:
-                verifier_logits = self.verifier_lm_head(
-                    self.verifier_norm(verifier_last_hidden_states)
+                verifier_logits = self._softcap(
+                    self.verifier_lm_head(
+                        self.verifier_norm(verifier_last_hidden_states)
+                    )
                 )
                 if not self.config.sample_from_anchor:
                     verifier_logits = torch.roll(verifier_logits, 1, dims=1)

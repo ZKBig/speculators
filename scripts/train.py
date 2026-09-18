@@ -9,7 +9,9 @@ from pathlib import Path
 import numpy as np
 import torch
 import transformers
+from huggingface_hub import hf_hub_download
 from packaging import version
+from safetensors.torch import load_file
 from transformers import LlamaConfig, PretrainedConfig
 from transformers.models.auto.configuration_auto import AutoConfig
 from transformers.models.qwen3.configuration_qwen3 import Qwen3Config
@@ -303,6 +305,72 @@ def load_draft_transformer_layer_config(
         )
         draft_config_obj.vocab_size = verifier_config.vocab_size
     return draft_config_obj
+
+
+# Tensors a DFlash-format drafter never carries; anything else left missing after
+# --init-backbone-from means the drafter and the draft config disagree.
+_BACKBONE_INIT_FRESH_PREFIXES = (
+    "embed_tokens.",
+    "lm_head.",
+    "verifier_lm_head.",
+    "verifier_norm.",
+    "refiner_head.",
+    "candidate_selector.",
+    "conv_",
+)
+
+
+def init_backbone_from(model: torch.nn.Module, source: str) -> None:
+    """Copy a DFlash drafter's backbone into ``model`` in place.
+
+    ``source`` is a local directory or HF id holding ``model.safetensors`` in the
+    z-lab DFlash layout (``fc``, ``hidden_norm``, ``norm``, ``layers.*``), which is
+    also the layout of the DFlash-family draft models here, so the tensors load by
+    name. Every tensor in the drafter must be consumed and every tensor left
+    uninitialised must be one the drafter is not expected to define; both are
+    checked so a shape or naming drift fails here rather than as silent noise.
+    """
+    path = Path(source)
+    if path.is_dir():
+        weights_file = path / "model.safetensors"
+    else:
+        weights_file = Path(hf_hub_download(source, "model.safetensors"))
+    state = load_file(str(weights_file))
+
+    own = dict(model.named_parameters())
+    mismatched = {
+        k: (tuple(v.shape), tuple(own[k].shape))
+        for k, v in state.items()
+        if k in own and tuple(v.shape) != tuple(own[k].shape)
+    }
+    if mismatched:
+        raise ValueError(
+            f"--init-backbone-from {source}: shape mismatch (drafter vs draft model): "
+            f"{mismatched}. Pass the same drafter as --draft-config."
+        )
+    result = model.load_state_dict(state, strict=False)
+    if result.unexpected_keys:
+        raise ValueError(
+            f"--init-backbone-from {source}: tensors with no home in the draft "
+            f"model: {sorted(result.unexpected_keys)}"
+        )
+    stray = [
+        k
+        for k in result.missing_keys
+        if not k.startswith(_BACKBONE_INIT_FRESH_PREFIXES)
+    ]
+    if stray:
+        raise ValueError(
+            f"--init-backbone-from {source}: draft tensors the drafter did not "
+            f"provide: {stray}"
+        )
+    logger.info(
+        "Initialised %d backbone tensors from %s; %d left at fresh init (%s)",
+        len(state),
+        source,
+        len(result.missing_keys),
+        ", ".join(sorted({k.split(".")[0] for k in result.missing_keys})),
+    )
 
 
 def _load_mappings(d2t_path, t2d_path, expected_draft_vocab_size: int | None):
@@ -607,6 +675,8 @@ def main(cfg: TrainConfig):  # noqa: C901
     model_class = registry[args.speculator_type]
 
     draft_model = build_draft_model(args, model_class, t2d, d2t, draft_vocab_size)
+    if args.init_backbone_from:
+        init_backbone_from(draft_model, args.init_backbone_from)
 
     # Get target layer IDs from the model (resolved at model level)
     num_target_layers = len(draft_model.target_layer_ids)  # type: ignore[arg-type]
