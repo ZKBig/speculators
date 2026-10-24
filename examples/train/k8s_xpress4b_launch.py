@@ -106,6 +106,13 @@ BASE_ANCHOR_FLOOR = env("XP4_BASE_ANCHOR_FLOOR", "0.2")
 DECAYED_LOSS_NORM = env("XP4_DECAYED_LOSS_NORM", "1")
 LOSS_FN = env("XP4_LOSS_FN", '{"ce": 0.1, "tv": 0.9}')
 DECAY_GAMMA = env("XP4_DECAY_GAMMA", "4.0")
+OPTIMIZER = env("XP4_OPTIMIZER", "adamw")
+MUON_LR = env("XP4_MUON_LR", "")
+# dpace weights each position by its decayed acceptance probability. The config
+# validator only accepts it with --loss-fn=ce, so a dpace run cannot also carry
+# the tv term.
+POS_WEIGHT = env("XP4_POS_WEIGHT", "fixed-exp-decay")
+TRAIN_DATA_RATIO = env("XP4_TRAIN_DATA_RATIO", "")
 EPOCHS = env("XP4_EPOCHS", "1")
 LR = env("XP4_LR", "6e-4")
 WEIGHT_DECAY = env("XP4_WEIGHT_DECAY", "0.0")
@@ -520,9 +527,9 @@ def train() -> int:
         "--dflash-decay-gamma",
         DECAY_GAMMA,
         "--per-position-loss-weight",
-        "fixed-exp-decay",
+        POS_WEIGHT,
         "--optimizer",
-        "adamw",
+        OPTIMIZER,
         "--lr",
         LR,
         "--weight-decay",
@@ -557,6 +564,10 @@ def train() -> int:
         cmd += ["--val-data-path", VAL_DATA_DIR]
     if MAX_STEPS:
         cmd += ["--max-steps", MAX_STEPS]
+    if MUON_LR:
+        cmd += ["--muon-lr", MUON_LR]
+    if TRAIN_DATA_RATIO:
+        cmd += ["--train-data-ratio", TRAIN_DATA_RATIO]
     if EVAL_INTERVAL:
         cmd += ["--eval-interval", EVAL_INTERVAL]
     if EVAL_MAX_BATCHES:
