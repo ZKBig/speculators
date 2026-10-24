@@ -72,6 +72,13 @@ EPOCHS = env("DF2_EPOCHS", "1")
 LR = env("DF2_LR", "6e-4")
 WEIGHT_DECAY = env("DF2_WEIGHT_DECAY", "0.0")
 WARMUP_RATIO = env("DF2_WARMUP_RATIO", "0.04")
+# The official dflash2 recipe pairs muon with ce + dpace; the defaults here keep
+# the AdamW/tv recipe this job has been running. muon_lr is 10*lr unless given,
+# and the official config sets it to 5*lr instead.
+OPTIMIZER = env("DF2_OPTIMIZER", "adamw")
+MUON_LR = env("DF2_MUON_LR", "")
+POS_WEIGHT = env("DF2_POS_WEIGHT", "fixed-exp-decay")
+TRAIN_DATA_RATIO = env("DF2_TRAIN_DATA_RATIO", "")
 CHECKPOINT_FREQ = env("DF2_CHECKPOINT_FREQ", "0.1")
 LOG_FREQ = env("DF2_LOG_FREQ", "50")
 RUN_NAME = env("DF2_RUN_NAME", "dflash2-qwen3-4b-8spec")
@@ -447,9 +454,9 @@ def train() -> int:
         "--dflash-decay-gamma",
         DECAY_GAMMA,
         "--per-position-loss-weight",
-        "fixed-exp-decay",
+        POS_WEIGHT,
         "--optimizer",
-        "adamw",
+        OPTIMIZER,
         "--lr",
         LR,
         "--weight-decay",
@@ -486,6 +493,10 @@ def train() -> int:
         cmd += ["--eval-interval", EVAL_INTERVAL]
     if EVAL_MAX_BATCHES:
         cmd += ["--eval-max-batches", EVAL_MAX_BATCHES]
+    if MUON_LR:
+        cmd += ["--muon-lr", MUON_LR]
+    if TRAIN_DATA_RATIO:
+        cmd += ["--train-data-ratio", TRAIN_DATA_RATIO]
     if NO_RESUME == "1":
         cmd += ["--no-resume-from-checkpoint"]
     if TRAIN_RANK == 0:
