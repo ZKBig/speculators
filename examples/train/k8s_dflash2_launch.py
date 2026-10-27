@@ -66,6 +66,7 @@ CONV_KERNEL_SIZE = env("DF2_CONV_KERNEL_SIZE", "2")
 CONV_GROUP_SIZE = env("DF2_CONV_GROUP_SIZE", "16")
 SELECTOR_RANK = env("DF2_SELECTOR_RANK", "256")
 SELECTOR_TOP_K = env("DF2_SELECTOR_TOP_K", "16")
+SELECTOR_MISS_POLICY = env("DF2_SELECTOR_MISS_POLICY", "replace")
 LOSS_FN = env("DF2_LOSS_FN", '{"ce": 0.1, "tv": 0.9}')
 DECAY_GAMMA = env("DF2_DECAY_GAMMA", "4.0")
 EPOCHS = env("DF2_EPOCHS", "1")
@@ -449,6 +450,8 @@ def train() -> int:
         SELECTOR_RANK,
         "--selector-top-k",
         SELECTOR_TOP_K,
+        "--selector-miss-policy",
+        SELECTOR_MISS_POLICY,
         "--loss-fn",
         LOSS_FN,
         "--dflash-decay-gamma",
